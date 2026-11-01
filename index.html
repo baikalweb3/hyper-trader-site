@@ -320,90 +320,27 @@ function watch(){
 function emaFull(v,n){const out=new Array(v.length).fill(null);if(v.length<n)return out;const k=2/(n+1);let e=v.slice(0,n).reduce((a,b)=>a+b,0)/n;out[n-1]=e;for(let i=n;i<v.length;i++){e=v[i]*k+e*(1-k);out[i]=e}return out}
 function rsi(cl,n=14){if(cl.length<=n)return null;let g=0,l=0;for(let i=1;i<=n;i++){const d=cl[i]-cl[i-1];g+=Math.max(d,0);l+=Math.max(-d,0)}g/=n;l/=n;for(let i=n+1;i<cl.length;i++){const d=cl[i]-cl[i-1];g=(g*(n-1)+Math.max(d,0))/n;l=(l*(n-1)+Math.max(-d,0))/n}return l===0?100:100-100/(1+g/l)}
 function atr(cs,n=14){if(cs.length<=n)return null;const tr=[];for(let i=1;i<cs.length;i++)tr.push(Math.max(cs[i].h-cs[i].l,Math.abs(cs[i].h-cs[i-1].c),Math.abs(cs[i].l-cs[i-1].c)));let a=tr.slice(0,n).reduce((x,y)=>x+y,0)/n;for(let i=n;i<tr.length;i++)a=(a*(n-1)+tr[i])/n;return a}
-function trendState(cs){
-  if(cs.length<60)return null;
-  const cl=cs.map(c=>c.c),e20=emaFull(cl,20),e50=emaFull(cl,50),L=cl.length-1,px=cl[L];
-  let score=(px>e20[L]?1:-1)+(e20[L]>e50[L]?1:-1)+(e20[L]>e20[L-5]?1:-1);
-  const vols=cs.map(c=>c.v),avg=vols.slice(-21,-1).reduce((a,b)=>a+b,0)/20;
-  return {px,e20:e20[L],e50:e50[L],rsi:rsi(cl),atr:atr(cs),vr:avg?vols[L]/avg:null,score};
-}
-function pullbackSignal(cs){
-  if(cs.length<60)return null;
-  const cl=cs.map(c=>c.c),e20=emaFull(cl,20),e50=emaFull(cl,50),L=cs.length-1,last=cs[L],a=atr(cs),r=rsi(cl);
-  if(!a)return null;
-  const up=e20[L]>e50[L],dn=e20[L]<e50[L];
-  const tDn=[0,1,2].some(i=>cs[L-i].l<=e20[L-i]),tUp=[0,1,2].some(i=>cs[L-i].h>=e20[L-i]);
-  if(up&&tDn&&last.c>e20[L]&&last.c>last.o&&(r==null||r<65))return{side:'long',entry:last.c,stop:Math.min(last.l,cs[L-1].l)-0.2*a,atr:a,t:last.t};
-  if(dn&&tUp&&last.c<e20[L]&&last.c<last.o&&(r==null||r>35))return{side:'short',entry:last.c,stop:Math.max(last.h,cs[L-1].h)+0.2*a,atr:a,t:last.t};
-  return null;
-}
-function breakoutSignal(cs){
-  if(cs.length<60)return null;
-  const L=cs.length-1,last=cs[L],a=atr(cs);if(!a)return null;
-  const rng=cs.slice(L-20,L),hi=Math.max(...rng.map(c=>c.h)),lo=Math.min(...rng.map(c=>c.l));
-  const vols=cs.map(c=>c.v),avg=vols.slice(L-20,L).reduce((x,y)=>x+y,0)/20,vr=avg?last.v/avg:1;
-  if(vr<1.2)return null;
-  if(last.c>hi)return{side:'long',entry:last.c,stop:last.c-1.5*a,atr:a,t:last.t,vr};
-  if(last.c<lo)return{side:'short',entry:last.c,stop:last.c+1.5*a,atr:a,t:last.t,vr};
-  return null;
-}
+function trendState(z){if(z.length<60)return null;const q=z.map(c=>c.c),e2=emaFull(q,20),e5=emaFull(q,50),L=q.length-1,px=q[L];let sc=(px>e2[L]?1:-1)+(e2[L]>e5[L]?1:-1)+(e2[L]>e2[L-5]?1:-1);const v=z.map(c=>c.v),av=v.slice(-21,-1).reduce((a,b)=>a+b,0)/20;return{px,e20:e2[L],e50:e5[L],rsi:rsi(q),atr:atr(z),vr:av?v[L]/av:null,score:sc}}
+function pullbackSignal(z){if(z.length<60)return null;const q=z.map(c=>c.c),e2=emaFull(q,20),e5=emaFull(q,50),L=z.length-1,x=z[L],a=atr(z),r=rsi(q);if(!a)return null;const u=e2[L]>e5[L],d=e2[L]<e5[L],td=[0,1,2].some(i=>z[L-i].l<=e2[L-i]),tu=[0,1,2].some(i=>z[L-i].h>=e2[L-i]);if(u&&td&&x.c>e2[L]&&x.c>x.o&&(r==null||r<65))return{side:'long',entry:x.c,stop:Math.min(x.l,z[L-1].l)-0.2*a,atr:a,t:x.t};if(d&&tu&&x.c<e2[L]&&x.c<x.o&&(r==null||r>35))return{side:'short',entry:x.c,stop:Math.max(x.h,z[L-1].h)+0.2*a,atr:a,t:x.t};return null}
+function breakoutSignal(z){if(z.length<60)return null;const L=z.length-1,x=z[L],a=atr(z);if(!a)return null;const g=z.slice(L-20,L),hi=Math.max(...g.map(c=>c.h)),lo=Math.min(...g.map(c=>c.l)),v=z.map(c=>c.v),av=v.slice(L-20,L).reduce((p,q)=>p+q,0)/20,vr=av?x.v/av:1;if(vr<1.2)return null;if(x.c>hi)return{side:'long',entry:x.c,stop:x.c-1.5*a,atr:a,t:x.t,vr};if(x.c<lo)return{side:'short',entry:x.c,stop:x.c+1.5*a,atr:a,t:x.t,vr};return null}
 
 /* ============ анализ монеты ============ */
-function swingSignal(cs,hz){
-  const lookback=hz.lookback||24;
-  if(cs.length<lookback+65)return null;
-  const st=trendState(cs);if(!st||!st.atr)return null;
-  const L=cs.length-1,last=cs[L],a=st.atr;
-  const ref=cs.slice(L-lookback,L); // диапазон ДО текущей свечи, без неё
-  const hi=Math.max(...ref.map(c=>c.h)),lo=Math.min(...ref.map(c=>c.l));
-  if(st.score>=2&&last.c>hi)return{side:'long',entry:last.c,stop:Math.min(lo,last.l)-0.5*a,atr:a,t:last.t,brk:true};
-  if(st.score<=-2&&last.c<lo)return{side:'short',entry:last.c,stop:Math.max(hi,last.h)+0.5*a,atr:a,t:last.t,brk:true};
-  return null;
-}
+function swingSignal(z,hz){const lb=hz.lookback||24;if(z.length<lb+65)return null;const st=trendState(z);if(!st||!st.atr)return null;const L=z.length-1,x=z[L],a=st.atr,g=z.slice(L-lb,L),hi=Math.max(...g.map(c=>c.h)),lo=Math.min(...g.map(c=>c.l));if(st.score>=2&&x.c>hi)return{side:'long',entry:x.c,stop:Math.min(lo,x.l)-0.5*a,atr:a,t:x.t,brk:true};if(st.score<=-2&&x.c<lo)return{side:'short',entry:x.c,stop:Math.max(hi,x.h)+0.5*a,atr:a,t:x.t,brk:true};return null}
 const HORIZONS={
   short:{tfs:ANALYSIS_TF,entryTf:'15m',rr:2,names:{'15m':'15м','1h':'1ч','4h':'4ч'},label:'краткосрочно',eventLabel:'час',
     sigFns:[['pullback',pullbackSignal],['breakout',breakoutSignal]]},
   intraday:{tfs:['1h','4h','1d'],entryTf:'1h',rr:3,names:{'1h':'1ч','4h':'4ч','1d':'1д'},label:'интрадей (крупнее движение)',eventLabel:'4 часа',lookback:24,
-    sigFns:[['breakout_1d_range',cs=>swingSignal(cs,{lookback:24})]]},
+    sigFns:[['breakout_1d_range',z=>swingSignal(z,{lookback:24})]]},
   mid:{tfs:MID_TF,entryTf:'4h',rr:3,names:{'4h':'4ч','1d':'1д','1w':'1н'},label:'среднесрочно (крупные движения)',eventLabel:'день',
     sigFns:[['pullback',pullbackSignal],['breakout',breakoutSignal]]}
 };
-function analyzeGeneric(coin,hz,key){
-  const{tfs,entryTf,rr}=hz,out={coin,tf:{},align:0,sigs:[],events:[]};
-  for(const tf of tfs){
-    const c=cache[coin+tf];if(!c)return null;
-    const st=trendState(closed(c.data));out.tf[tf]=st;out.align+=st?st.score:0;
-  }
-  out.bias=out.align>=4?'long':out.align<=-4?'short':'mixed';
-  const hA=out.tf[tfs[1]],hB=out.tf[tfs[2]];
-  out.htf=(hA&&hB&&hA.score>=2&&hB.score>=0)?'long':(hA&&hB&&hA.score<=-2&&hB.score<=0)?'short':null;
-  const ce=closed(cache[coin+entryTf].data),cx=S.ctx[coin];
-  const f8=cx?cx.funding*800:0;
-  for(const [kind,fn] of hz.sigFns){
-    const s=fn(ce);if(!s)continue;
-    if(out.htf&&out.htf!==s.side)continue;
-    const risk=Math.abs(s.entry-s.stop);if(!risk)continue;
-    let conf=40,notes=[];
-    if(out.htf===s.side){conf+=15;notes.push(hz.names[tfs[1]]+' и '+hz.names[tfs[2]]+' идут в ту же сторону')}else notes.push('старшие таймфреймы без чёткого направления');
-    if((s.side==='long'&&out.align>=6)||(s.side==='short'&&out.align<=-6)){conf+=10;notes.push('все три таймфрейма согласны')}
-    const vr=out.tf[entryTf]?out.tf[entryTf].vr:null;
-    if(vr&&vr>1.3){conf+=10;notes.push('объём выше среднего ×'+vr.toFixed(1))}
-    const r=out.tf[entryTf]?out.tf[entryTf].rsi:null;
-    if(r!=null&&((s.side==='long'&&r>72)||(s.side==='short'&&r<28))){conf-=15;notes.push('RSI перегрет: поздний вход')}
-    if((s.side==='long'&&f8>0.03)||(s.side==='short'&&f8<-0.03)){conf-=10;notes.push('funding против позиции: толпа уже в этой стороне')}
-    conf=Math.max(5,Math.min(95,conf));
-    const target=s.side==='long'?s.entry+rr*risk:s.entry-rr*risk;
-    out.sigs.push({id:coin+'|'+hz.entryTf+'|'+kind+'|'+s.side+'|'+s.t,coin,kind,side:s.side,entry:s.entry,stop:s.stop,target,rr,conf,notes,t:s.t,atr:s.atr,found:Date.now(),horizon:key});
-  }
-  // события
-  const h=closed(cache[coin+tfs[1]].data);
-  if(h.length>2){const mv=(h[h.length-1].c/h[h.length-2].c-1)*100;const thr=entryTf==='15m'?2.5:entryTf==='1h'?4:6;if(Math.abs(mv)>=thr)out.events.push({coin,k:'move',text:'Движение за последний '+hz.eventLabel+' '+fmtPct(mv,1),sev:Math.abs(mv)>=thr*1.6?2:1})}
-  if(Math.abs(f8)>=0.05)out.events.push({coin,k:'fund',text:'Funding '+(f8>0?'+':'')+f8.toFixed(3)+'% за 8ч: '+(f8>0?'лонги переплачивают':'шорты переплачивают'),sev:1});
-  const te=out.tf[entryTf];
-  if(te&&te.vr&&te.vr>=3)out.events.push({coin,k:'vol',text:'Всплеск объёма ×'+te.vr.toFixed(1)+' на '+hz.names[entryTf],sev:1});
-  if(te&&te.rsi!=null&&(te.rsi>=78||te.rsi<=22))out.events.push({coin,k:'rsi',text:'RSI('+hz.names[entryTf]+') '+te.rsi.toFixed(0)+': экстремум',sev:1});
-  return out;
-}
+function analyzeGeneric(coin,hz,key){const{tfs:T,entryTf:E,rr:R}=hz,O={coin,tf:{},align:0,sigs:[],events:[]};for(const tf of T){const c=cache[coin+tf];if(!c)return null;const st=trendState(closed(c.data));O.tf[tf]=st;O.align+=st?st.score:0}O.bias=O.align>=4?'long':O.align<=-4?'short':'mixed';const hA=O.tf[T[1]],hB=O.tf[T[2]];O.htf=(hA&&hB&&hA.score>=2&&hB.score>=0)?'long':(hA&&hB&&hA.score<=-2&&hB.score<=0)?'short':null;const ce=closed(cache[coin+E].data),cx=S.ctx[coin],f8=cx?cx.funding*800:0;
+  for(const[kind,fn]of hz.sigFns){const s=fn(ce);if(!s)continue;if(O.htf&&O.htf!==s.side)continue;const risk=Math.abs(s.entry-s.stop);if(!risk)continue;let w=40,notes=[];if(O.htf===s.side){w+=15;notes.push(hz.names[T[1]]+' и '+hz.names[T[2]]+' идут в ту же сторону')}else notes.push('старшие таймфреймы без чёткого направления');if((s.side==='long'&&O.align>=6)||(s.side==='short'&&O.align<=-6)){w+=10;notes.push('все три таймфрейма согласны')}const vr=O.tf[E]?O.tf[E].vr:null;if(vr&&vr>1.3){w+=10;notes.push('объём выше среднего ×'+vr.toFixed(1))}const r=O.tf[E]?O.tf[E].rsi:null;if(r!=null&&((s.side==='long'&&r>72)||(s.side==='short'&&r<28))){w-=15;notes.push('RSI перегрет: поздний вход')}if((s.side==='long'&&f8>0.03)||(s.side==='short'&&f8<-0.03)){w-=10;notes.push('funding против позиции: толпа уже в этой стороне')}w=Math.max(5,Math.min(95,w));const target=s.side==='long'?s.entry+R*risk:s.entry-R*risk;O.sigs.push({id:coin+'|'+hz.entryTf+'|'+kind+'|'+s.side+'|'+s.t,coin,kind,side:s.side,entry:s.entry,stop:s.stop,target,rr:R,conf:w,notes,t:s.t,atr:s.atr,found:Date.now(),horizon:key})}
+  const h=closed(cache[coin+T[1]].data);if(h.length>2){const mv=(h[h.length-1].c/h[h.length-2].c-1)*100,thr=E==='15m'?2.5:E==='1h'?4:6;if(Math.abs(mv)>=thr)O.events.push({coin,k:'move',text:'Движение за последний '+hz.eventLabel+' '+fmtPct(mv,1),sev:Math.abs(mv)>=thr*1.6?2:1})}
+  if(Math.abs(f8)>=0.05)O.events.push({coin,k:'fund',text:'Funding '+(f8>0?'+':'')+f8.toFixed(3)+'% за 8ч: '+(f8>0?'лонги переплачивают':'шорты переплачивают'),sev:1});
+  const te=O.tf[E];if(te&&te.vr&&te.vr>=3)O.events.push({coin,k:'vol',text:'Всплеск объёма ×'+te.vr.toFixed(1)+' на '+hz.names[E],sev:1});
+  if(te&&te.rsi!=null&&(te.rsi>=78||te.rsi<=22))O.events.push({coin,k:'rsi',text:'RSI('+hz.names[E]+') '+te.rsi.toFixed(0)+': экстремум',sev:1});
+  return O}
 function analyze(coin){return analyzeGeneric(coin,HORIZONS.short,'short')}
 async function scanCoin(coin){
   try{
