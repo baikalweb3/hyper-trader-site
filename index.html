@@ -999,7 +999,7 @@ function tabExit(){
   const cs=closed((cache[S.sel+'15m']||{data:[]}).data),a=atr(cs),last20=cs.slice(-20);
   let trail=null;if(a&&last20.length){trail=long?Math.max(T.stop,Math.max(...last20.map(c=>c.h))-3*a):Math.min(T.stop,Math.min(...last20.map(c=>c.l))+3*a)}
   const err=ticketErr();
-  return ticketForm()+(err?'<p class="note dn">'+err+'</p>':'')
+  return portfolioRiskHTML()+ticketForm()+(err?'<p class="note dn">'+err+'</p>':'')
    +'<div class="lv"><div>Риск 1R<b>'+(risk/T.entry*100).toFixed(2)+'%</b></div><div>+1R<b class="up">'+fmtPx(t1)+'</b></div><div>+2R<b class="up">'+fmtPx(t2)+'</b></div><div>+3R<b class="up">'+fmtPx(t3)+'</b></div></div>'
    +'<div id="liveR" style="margin-bottom:8px">'+liveRText()+'</div>'
    +'<ol class="steps"><li>Вход <b class="mono">'+fmtPx(T.entry)+'</b>, стоп <b class="mono dn">'+fmtPx(T.stop)+'</b>. Стоп не двигать дальше от входа.</li>'
@@ -1078,11 +1078,25 @@ function checkPositions(){
 }
 
 const MAJORS=['BTC','ETH','SOL','BNB','XRP'];
+function portfolioRiskNotes(pos){
+  const n=pos.length;if(!n)return{n,naiveRiskPct:0,notes:[]};
+  const s=S.set,naiveRiskPct=n*s.riskPct;
+  const majorsOpen=pos.filter(p=>MAJORS.includes(p.coin)).map(p=>p.coin);
+  const longs=pos.filter(p=>p.side==='long').length,shorts=n-longs;
+  const oneSided=n>=3&&(longs===0||shorts===0);
+  const sameCoin=Object.entries(pos.reduce((a,p)=>{a[p.coin]=(a[p.coin]||0)+1;return a},{})).filter(([,c])=>c>1).map(([c])=>c);
+  const notes=[];
+  if(majorsOpen.length>=2)notes.push('открыто сразу несколько крупных монет ('+majorsOpen.join(', ')+') — они обычно двигаются синхронно, реальный риск выше суммы');
+  if(oneSided)notes.push('все '+n+' позиции на одной стороне ('+(longs?'лонг':'шорт')+') — это ставка на одно общее движение рынка, а не '+n+' независимых сделок');
+  if(sameCoin.length)notes.push('по монете'+(sameCoin.length>1?'ам':'')+' '+sameCoin.join(', ')+' открыто больше одной позиции одновременно');
+  if(n>=5)notes.push('много позиций сразу ('+n+') — сложнее уследить за каждым стопом вручную');
+  return{n,naiveRiskPct,notes};
+}
 function portfolioRiskHTML(){
   if(!S.pos.length)return '';
-  const s=S.set,n=S.pos.length,naiveRiskPct=n*s.riskPct;
-  const majorsOpen=S.pos.filter(p=>MAJORS.includes(p.coin)).map(p=>p.coin);
-  return '<div class="verdict '+((naiveRiskPct>s.dailyLimit||majorsOpen.length>=2)?'warn':'go')+'" style="margin-bottom:12px"><div><div class="big" style="font-size:16px">Портфель: '+n+' позици'+(n===1?'я':n<5?'и':'й')+' под наблюдением</div><div style="font-size:13px;margin-top:3px">Если риск на каждую — '+s.riskPct+'%, суммарно под риском ≈ <b class="'+(naiveRiskPct>s.dailyLimit?'dn':'up')+'">'+naiveRiskPct.toFixed(1)+'%</b> баланса одновременно'+(majorsOpen.length>=2?'. Внимание: открыто сразу несколько крупных монет ('+majorsOpen.join(', ')+') — они обычно двигаются синхронно, реальный риск выше суммы.':'.')+'</div></div></div>';
+  const s=S.set,{n,naiveRiskPct,notes}=portfolioRiskNotes(S.pos);
+  const warn=naiveRiskPct>s.dailyLimit||notes.length>0;
+  return '<div class="verdict '+(warn?'warn':'go')+'" style="margin-bottom:12px"><div><div class="big" style="font-size:16px">Портфель: '+n+' позици'+(n===1?'я':n<5?'и':'й')+' под наблюдением</div><div style="font-size:13px;margin-top:3px">Если риск на каждую — '+s.riskPct+'%, суммарно под риском ≈ <b class="'+(naiveRiskPct>s.dailyLimit?'dn':'up')+'">'+naiveRiskPct.toFixed(1)+'%</b> баланса одновременно.'+(notes.length?' Внимание: '+notes.join('; ')+'.':'')+'</div></div></div>';
 }
 // Реальный дневной лимит потерь: считаем не по ручной отметке "уже потеряно",
 // а автоматически — по журналу закрытых сегодня сделок (R<0), в долларах при
@@ -1353,6 +1367,11 @@ $('#dBody').addEventListener('click',e=>{
       if(s.dailyLimit>0&&riskUsd>dl.left){
         const over=confirm('Дневной лимит потерь почти или уже исчерпан: остаток '+dl.left.toFixed(2)+' $, а риск этой сделки '+riskUsd.toFixed(2)+' $ (сегодня уже потеряно '+dl.effLost.toFixed(2)+' $ из лимита '+dl.limitUsd.toFixed(2)+' $).\n\nВсё равно взять сделку?');
         if(!over)return;
+      }
+      const simPos=S.pos.concat([{coin:S.sel,side:T.side}]),pr=portfolioRiskNotes(simPos);
+      if(pr.notes.length){
+        const over2=confirm('Эта сделка увеличит общий риск портфеля: '+pr.notes.join('; ')+'.\n\nВсё равно взять сделку?');
+        if(!over2)return;
       }
       S.pos.push({id:Date.now().toString(36),coin:S.sel,side:T.side,entry:T.entry,stop:T.stop,target:T.target,t1:long?T.entry+risk:T.entry-risk,t2:long?T.entry+2*risk:T.entry-2*risk,done:[]});
       store.set('pos',S.pos);
