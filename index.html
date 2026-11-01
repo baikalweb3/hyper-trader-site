@@ -640,18 +640,28 @@ function selectCoin(coin,keepTicket){
 }
 
 function loadBook(coin){
-  // nSigFigs:3 — агрегируем заявки в более крупные ценовые шаги, чтобы те же ~20 уровней
-  // охватывали заметно более широкий диапазон цены, а не только пару копеек у спреда
-  return post({type:'l2Book',coin,nSigFigs:3}).then(b=>{
-    const[bids0,asks0]=b.levels,P=l=>l.map(x=>({px:+x.px,usd:+x.px*+x.sz}));
-    const bids=P(bids0),asks=P(asks0),bn=bids.slice(0,10).reduce((a,x)=>a+x.usd,0),an=asks.slice(0,10).reduce((a,x)=>a+x.usd,0);
+  // У Hyperliquid l2Book всегда отдаёт максимум 20 уровней на сторону — больше
+  // не бывает ни при каком nSigFigs. Поэтому один запрос — это всегда компромисс:
+  // либо точность у цены, либо охват дальних уровней. Берём ОБА снепшота параллельно:
+  // nSigFigs:5 — почти без округления, для лесенки и ближних стен прямо у цены;
+  // nSigFigs:2 — крупные ценовые шаги, те же 20 уровней покрывают намного больший
+  // диапазон цены, для честной статистики давления на ±3% и дальних зон.
+  return Promise.all([
+    post({type:'l2Book',coin,nSigFigs:5}),
+    post({type:'l2Book',coin,nSigFigs:2})
+  ]).then(([fine,coarse])=>{
+    const P=l=>l.map(x=>({px:+x.px,usd:+x.px*+x.sz}));
+    const[fb0,fa0]=fine.levels,[cb0,ca0]=coarse.levels;
+    const bids=P(fb0),asks=P(fa0),bidsWide=P(cb0),asksWide=P(ca0);
+    const bn=bids.slice(0,10).reduce((a,x)=>a+x.usd,0),an=asks.slice(0,10).reduce((a,x)=>a+x.usd,0);
     const bb=bids[0].px,ba=asks[0].px,mid=(ba+bb)/2;
     const med=l=>{const v=l.map(x=>x.usd).sort((a,c)=>a-c);return v[v.length>>1]||1};
     const wall=(l,m)=>l.filter(x=>x.usd>=3*m).sort((a,c)=>c.usd-a.usd).slice(0,5);
-    const allB=bids.reduce((a,x)=>a+x.usd,0),allA=asks.reduce((a,x)=>a+x.usd,0);
+    const allB=bidsWide.reduce((a,x)=>a+x.usd,0),allA=asksWide.reduce((a,x)=>a+x.usd,0);
     const far=(l,pct)=>l.filter(x=>Math.abs(x.px-mid)/mid<=pct/100).reduce((a,x)=>a+x.usd,0);
-    S.book[coin]={spread:(ba-bb)/mid*1e4,imb:(bn-an)/(bn+an),at:Date.now(),mid,bids,asks,bw:wall(bids,med(bids)),aw:wall(asks,med(asks)),
-      depth:{allB,allA,near:{b:far(bids,0.5),a:far(asks,0.5)},wide:{b:far(bids,3),a:far(asks,3)},lowPx:bids[bids.length-1]?.px,hiPx:asks[asks.length-1]?.px}};
+    S.book[coin]={spread:(ba-bb)/mid*1e4,imb:(bn-an)/(bn+an),at:Date.now(),mid,bids,asks,bidsWide,asksWide,
+      bw:wall(bids,med(bids)),aw:wall(asks,med(asks)),bwFar:wall(bidsWide,med(bidsWide)),awFar:wall(asksWide,med(asksWide)),
+      depth:{allB,allA,near:{b:far(bids,0.5),a:far(asks,0.5)},wide:{b:far(bidsWide,3),a:far(asksWide,3)},lowPx:bidsWide[bidsWide.length-1]?.px,hiPx:asksWide[asksWide.length-1]?.px}};
     if(S.sel===coin){if(S.tab==='entry'||S.tab==='walls')renderTab();drawMain()}
   }).catch(()=>{});
 }
@@ -680,10 +690,14 @@ function tabWalls(){
   const row=(w,c,t)=>'<tr style="cursor:default"><td class="'+c+'">'+t+'</td><td class="mono">'+fmtPx(w.px)+'</td><td class="r mono">'+fmtUsd(w.usd)+'</td><td class="r mono mut">'+((w.px/bk.mid-1)*100>=0?'+':'')+((w.px/bk.mid-1)*100).toFixed(2)+'%</td></tr>';
   const rows=bk.aw.slice().sort((a,b)=>b.px-a.px).map(w=>row(w,'dn','продают')).concat(bk.bw.map(w=>row(w,'up','покупают')));
   const tb=bk.bids.reduce((a,x)=>a+x.usd,0),ta=bk.asks.reduce((a,x)=>a+x.usd,0);
+  const rowFar=(w,c,t)=>'<tr style="cursor:default"><td class="'+c+'">'+t+'</td><td class="mono">'+fmtPx(w.px)+'</td><td class="r mono">'+fmtUsd(w.usd)+'</td><td class="r mono mut">'+((w.px/bk.mid-1)*100>=0?'+':'')+((w.px/bk.mid-1)*100).toFixed(2)+'%</td></tr>';
+  const rowsFar=(bk.awFar||[]).slice().sort((a,b)=>b.px-a.px).map(w=>rowFar(w,'dn','продают')).concat((bk.bwFar||[]).map(w=>rowFar(w,'up','покупают')));
   return ladder+bookReadHTML(bk)+'<hr class="hr"><div class="mut" style="font-size:12px;margin-bottom:6px">Стенки — крупные заявки в стакане, минимум в 3 раза больше обычной. Красные — где выставлены продажи, зелёные — покупки.</div>'
    +(rows.length?'<table class="scan"><thead><tr><th>Кто</th><th>Цена</th><th class="r">Объём</th><th class="r">От цены</th></tr></thead><tbody>'+rows.join('')+'</tbody></table>':'<div class="empty">Явных стенок сейчас нет: заявки лежат ровно.</div>')
    +'<div class="lv"><div>Покупатели, вся глубина<b class="up">'+fmtUsd(tb)+'</b></div><div>Продавцы, вся глубина<b class="dn">'+fmtUsd(ta)+'</b></div><div>Спред<b>'+bk.spread.toFixed(1)+' б.п.</b></div></div>'
    +'<p class="note">Стенку могут убрать в любую секунду, а часть крупных игроков выставляет «пустышки». Это ориентир, где цене может быть тяжело пройти, а не гарантия.</p>'
+   +'<hr class="hr"><div class="mut" style="font-size:12px;margin-bottom:6px">Дальние зоны — то же самое, но на более широких ценовых шагах: видно крупные скопления заявок там, куда обычная 20-уровневая глубина не достаёт (биржа отдаёт максимум 20 уровней на сторону, поэтому для дальних цен нужен отдельный запрос с более крупным шагом).</div>'
+   +(rowsFar.length?'<table class="scan"><thead><tr><th>Кто</th><th>Зона цены</th><th class="r">Объём</th><th class="r">От цены</th></tr></thead><tbody>'+rowsFar.join('')+'</tbody></table>':'<div class="empty">Явных дальних зон сейчас нет.</div>')
    +'<hr class="hr"><div id="wideProf">'+wideProfileHTML(coin,(S.wideP&&S.wideP[coin+'_wide_'+(S.wideRange||50)]&&S.wideP[coin+'_wide_'+(S.wideRange||50)].p)||null)+'</div>';
 }
 function renderDetailFrame(){
