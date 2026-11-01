@@ -1016,7 +1016,8 @@ function posHTML(){
   if(!S.pos.length)return '';
   return '<hr class="hr"><div class="mut" style="font-size:12px;margin-bottom:6px">Под наблюдением</div>'+S.pos.map(p=>{
     const cx=S.ctx[p.coin],risk=Math.abs(p.entry-p.stop),long=p.side==='long',R=cx?((long?cx.mark-p.entry:p.entry-cx.mark)/risk):0;
-    return '<div class="card" style="cursor:default"><div class="h">'+sideChip(p.side)+' '+p.coin+' <span class="grow"></span><span class="mono '+(R>=0?'up':'dn')+'">'+(R>=0?'+':'')+R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(p.entry)+' · стоп '+fmtPx(p.stop)+' · +1R '+fmtPx(p.t1)+' · +2R '+fmtPx(p.t2)+(p.done.length?' · сработало: '+p.done.join(', '):'')+'</div><div style="display:flex;gap:6px;margin-top:6px"><button class="btn sm" data-close="'+p.id+'">Закрыть и записать в журнал</button><button class="btn sm" data-rm="'+p.id+'">Убрать без записи</button></div></div>'}).join('');
+    const f8=cx?cx.funding*800:0,against=(long&&f8>0)||(!long&&f8<0);
+    return '<div class="card" style="cursor:default"><div class="h">'+sideChip(p.side)+' '+p.coin+' <span class="grow"></span><span class="mono '+(R>=0?'up':'dn')+'">'+(R>=0?'+':'')+R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(p.entry)+' · стоп '+fmtPx(p.stop)+' · +1R '+fmtPx(p.t1)+' · +2R '+fmtPx(p.t2)+(p.done.length?' · сработало: '+p.done.join(', '):'')+' · funding '+(f8>=0?'+':'')+f8.toFixed(4)+'%/8ч'+(against?' <span class="dn">(платите, против позиции)</span>':f8!==0?' <span class="up">(получаете)</span>':'')+'</div><div style="display:flex;gap:6px;margin-top:6px"><button class="btn sm" data-close="'+p.id+'">Закрыть и записать в журнал</button><button class="btn sm" data-rm="'+p.id+'">Убрать без записи</button></div></div>'}).join('');
 }
 function closePosition(id,exitPx){
   const p=S.pos.find(x=>x.id===id);if(!p)return;
@@ -1222,13 +1223,15 @@ function renderCandidates(){
   box.innerHTML=cands.map(s=>{
     const lv=suggestLev(s.coin,s.entry,s.stop);
     const hz=HORIZONS[s.horizon||'short'];
+    const cx=S.ctx[s.coin],f8=cx?cx.funding*800:0,against=(s.side==='long'&&f8>0.03)||(s.side==='short'&&f8<-0.03);
     return '<div class="cand" data-cand="'+s.coin+'|'+s.id+'"><div class="h">'+sideChip(s.side)+'<span class="coin">'+s.coin+'</span><span class="grow"></span><span class="mono acc" style="font-size:12px">'+s.conf+'%</span></div>'
      +'<div class="row"><span>Горизонт</span><b style="font-size:12px">'+hz.label+' · '+hz.names[hz.entryTf]+'</b></div>'
      +'<div class="row"><span>Вход</span><b>'+fmtPx(s.entry)+'</b></div>'
      +'<div class="row"><span>Стоп</span><b class="dn">'+fmtPx(s.stop)+'</b></div>'
      +'<div class="row"><span>Тейк ('+s.rr+'R)</span><b class="up">'+fmtPx(s.target)+'</b></div>'
      +'<div class="row"><span>Плечо</span><b>'+lv.useLev+'×</b></div>'
-     +'<div class="row"><span>Риск</span><b>'+(Math.abs(s.entry-s.stop)/s.entry*100).toFixed(2)+'%</b></div></div>';
+     +'<div class="row"><span>Риск</span><b>'+(Math.abs(s.entry-s.stop)/s.entry*100).toFixed(2)+'%</b></div>'
+     +'<div class="row"><span>Funding 8ч</span><b class="'+(against?'dn':'')+'">'+(f8>=0?'+':'')+f8.toFixed(4)+'%'+(against?' — против позиции':'')+'</b></div></div>';
   }).join('');
   $$('[data-cand]',box).forEach(c=>c.onclick=()=>{
     const [coin,id]=c.dataset.cand.split('|'),sg=S.sigs.find(x=>x.id===id);if(!sg)return;
