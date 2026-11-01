@@ -750,9 +750,23 @@ function ticketForm(){
 function readTicket(){
   const T=S.T;if(!T)return;
   const n=id=>{const e=$(id);return e?parseFloat(String(e.value).replace(',','.')):NaN};
-  const s=$('#tSide');if(s)T.side=s.value;
+  const sEl=$('#tSide'),newSide=sEl?sEl.value:T.side,sideChanged=!!newSide&&newSide!==T.side;
+  // При смене стороны (лонг↔шорт) старые стоп/цель были посчитаны для другой стороны
+  // и сами по себе больше не имеют смысла (стоп окажется не с той стороны от входа).
+  // Вместо того чтобы просто показывать ошибку валидации, отзеркаливаем их через вход:
+  // та же дистанция риска и то же соотношение риск:прибыль, но в другую сторону.
+  const riskDist=Math.abs(T.stop-T.entry),rewDist=Math.abs(T.target-T.entry);
   const e=n('#tEntry'),st=n('#tStop'),tg=n('#tTarget');
-  if(e>0)T.entry=e;if(st>0)T.stop=st;if(tg>0)T.target=tg;
+  if(e>0)T.entry=e;
+  if(sideChanged){
+    T.side=newSide;
+    const long=newSide==='long';
+    T.stop=long?T.entry-riskDist:T.entry+riskDist;
+    T.target=long?T.entry+rewDist:T.entry-rewDist;
+  }else{
+    if(st>0)T.stop=st;
+    if(tg>0)T.target=tg;
+  }
   T.from='ваши значения';S.tm=null;
 }
 function ticketErr(){
