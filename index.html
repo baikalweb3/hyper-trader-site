@@ -257,7 +257,7 @@ const S={
   set:Object.assign({coins:'',minConf:55,sound:false,theme:'auto',balance:1000,riskPct:1,dailyLimit:3,lost:0,watchN:20,tgToken:'',tgChat:''},store.get('set',{})),
   ctx:{}, an:{}, sel:'BTC', tf:'15m', tab:'entry', feed:'sig', view:'scan',
   sigs:store.get('sigs',[]), seen:new Set(store.get('seen',[])), events:[], news:[], newsErr:[], newsAt:0, anStore:{mid:{},intraday:{}}, horizon:'short', sigTrack:store.get('sigTrack',[]), journal:store.get('journal',[]),
-  pos:store.get('pos',[]), T:null, book:{}, tm:null, status:'init', lastCtx:0, lastScan:0, errs:0,
+  pos:store.get('pos',[]), T:null, book:{}, tm:null, status:'init', lastCtx:0, lastScan:0, errs:0, oiHist:{},
   auth:store.get('auth',null)
 };
 const saveSet=()=>store.set('set',S.set);
@@ -302,12 +302,39 @@ async function getCandles(coin,tf,n=160){
   return cache[key].data;
 }
 const closed=cs=>cs.filter(c=>c.T<Date.now());
+// Открытый интерес (OI) Hyperliquid сам отдаёт в той же metaAndAssetCtxs,
+// что мы и так опрашиваем каждые 20с — никаких лишних запросов. Но сам по
+// себе текущий OI мало что говорит; классический разбор — куда он движется
+// ВМЕСТЕ с ценой (растёт цена+растёт OI — заходят новые деньги по тренду,
+// крепкое движение; растёт цена, но OI падает — шорты просто закрываются,
+// движение слабее, чем кажется; и т.д.). Для этого храним короткую историю
+// OI по каждой монете и используем её в чек-листе входа (см. oiTrend).
+const OI_HIST_MS=3*3600e3; // держим историю на 3 часа вперёд, используем срез поменьше
+function pushOiHist(out){
+  const now=Date.now();
+  S.oiHist=S.oiHist||{};
+  for(const coin in out){
+    const h=S.oiHist[coin]=S.oiHist[coin]||[];
+    h.push({t:now,oi:out[coin].oi,px:out[coin].mark});
+    while(h.length&&now-h[0].t>OI_HIST_MS)h.shift();
+  }
+}
+function oiTrend(coin,minutes){
+  const h=S.oiHist&&S.oiHist[coin];if(!h||h.length<2)return null;
+  const cutoff=Date.now()-minutes*60e3;
+  let base=h[0];for(const p of h){if(p.t<=cutoff)base=p;else break}
+  if(base===h[h.length-1])return null;
+  const last=h[h.length-1];
+  const oiPct=base.oi?(last.oi/base.oi-1)*100:0,pxPct=base.px?(last.px/base.px-1)*100:0;
+  return{oiPct,pxPct,minutesActual:(last.t-base.t)/60000};
+}
 async function refreshCtx(){
   const [meta,ctxs]=await post({type:'metaAndAssetCtxs'});
   const out={};
   meta.universe.forEach((u,i)=>{const c=ctxs[i];if(!c||u.isDelisted)return;
     out[u.name]={maxLev:u.maxLeverage,funding:+c.funding,oi:+c.openInterest*+c.markPx,vol:+c.dayNtlVlm,mark:+c.markPx,prev:+c.prevDayPx}});
   S.ctx=out;S.lastCtx=Date.now();
+  pushOiHist(out);
 }
 function universe(){return Object.entries(S.ctx).sort((a,b)=>b[1].vol-a[1].vol).map(e=>e[0])}
 function watch(){
@@ -796,6 +823,22 @@ function tabEntry(){
   L(sg?true:false,sg?('Сетап на '+hz.names[hz.entryTf]+': '+(sg.kind==='pullback'?'откат к EMA20 по тренду, свеча закрылась в сторону тренда':sg.kind==='breakout_1d_range'?'пробой диапазона последних суток по тренду':'пробой 20-свечного диапазона на повышенном объёме')):'Сетапа на '+hz.names[hz.entryTf]+' сейчас нет');
   if(te&&te.vr)L(te.vr>=1?true:null,'Объём последней свечи ×'+te.vr.toFixed(1)+' от среднего');
   L(Math.abs(f8)<=0.03?true:null,'Funding '+(f8>=0?'+':'')+f8.toFixed(4)+'% за 8ч'+(Math.abs(f8)>0.03?' — толпа перекошена, держать позицию дороже':''));
+  {
+    // Открытый интерес вместе с ценой — классический разбор: растут оба
+    // сразу — заходят новые деньги по тренду; цена растёт, а OI падает —
+    // это скорее закрытие шортов (шорт-сквиз), чем новый спрос, и наоборот.
+    const dir=sg?sg.side:(a.bias!=='mixed'?a.bias:null);
+    const oiT=oiTrend(coin,60);
+    if(oiT&&oiT.minutesActual>=10){
+      const{oiPct,pxPct}=oiT,risingOi=oiPct>1,fallingOi=oiPct<-1,risingPx=pxPct>0.1,fallingPx=pxPct<-0.1;
+      let extra=' — заметных изменений нет',ok=null;
+      if(risingOi&&risingPx){extra=' — в рост заходят новые деньги, движение подтверждено объёмом интереса';ok=dir==='long'?true:(dir==='short'?false:null)}
+      else if(risingOi&&fallingPx){extra=' — в падение заходят новые шорты, движение подтверждено';ok=dir==='short'?true:(dir==='long'?false:null)}
+      else if(fallingOi&&risingPx){extra=' — рост похож на закрытие шортов (шорт-сквиз), а не на новый спрос, будьте осторожнее';ok=null}
+      else if(fallingOi&&fallingPx){extra=' — падение похоже на закрытие лонгов, а не на новые продажи, будьте осторожнее';ok=null}
+      L(ok,'Открытый интерес '+(oiPct>=0?'+':'')+oiPct.toFixed(1)+'%, цена '+(pxPct>=0?'+':'')+pxPct.toFixed(1)+'% за '+Math.round(oiT.minutesActual)+' мин'+extra);
+    }
+  }
   {
     // Стакан смотрим всегда, не только на интрадей-горизонте: он показывает,
     // есть ли реальный спрос/предложение под ожидаемым движением — сигналом
