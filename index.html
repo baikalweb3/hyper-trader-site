@@ -796,8 +796,13 @@ function tabEntry(){
   L(sg?true:false,sg?('Сетап на '+hz.names[hz.entryTf]+': '+(sg.kind==='pullback'?'откат к EMA20 по тренду, свеча закрылась в сторону тренда':sg.kind==='breakout_1d_range'?'пробой диапазона последних суток по тренду':'пробой 20-свечного диапазона на повышенном объёме')):'Сетапа на '+hz.names[hz.entryTf]+' сейчас нет');
   if(te&&te.vr)L(te.vr>=1?true:null,'Объём последней свечи ×'+te.vr.toFixed(1)+' от среднего');
   L(Math.abs(f8)<=0.03?true:null,'Funding '+(f8>=0?'+':'')+f8.toFixed(4)+'% за 8ч'+(Math.abs(f8)>0.03?' — толпа перекошена, держать позицию дороже':''));
-  if(S.horizon==='short'){
-    if(bk){const against=sg&&((sg.side==='long'&&bk.imb<-0.3)||(sg.side==='short'&&bk.imb>0.3));L(against?false:true,'Стакан: спред '+bk.spread.toFixed(1)+' б.п., перекос '+(bk.imb>=0?'+':'')+(bk.imb*100).toFixed(0)+'% (плюс — больше покупателей)')}
+  {
+    // Стакан смотрим всегда, не только на интрадей-горизонте: он показывает,
+    // есть ли реальный спрос/предложение под ожидаемым движением — сигналом
+    // или, если сигнала пока нет, под ожидаемым направлением (a.bias).
+    const dir=sg?sg.side:(a.bias!=='mixed'?a.bias:null);
+    const against=dir&&bk?((dir==='long'&&bk.imb<-0.3)||(dir==='short'&&bk.imb>0.3)):null;
+    if(bk)L(dir?(against?false:true):null,'Стакан: спред '+bk.spread.toFixed(1)+' б.п., перекос '+(bk.imb>=0?'+':'')+(bk.imb*100).toFixed(0)+'% (плюс — больше покупателей)'+(dir?(against?' — против ожидаемого движения':' — не против ожидаемого движения'):''));
     else L(null,'Стакан загружается…');
   }
   const ev=S.events.filter(e=>e.coin===coin).concat(newsRisk(coin));
@@ -806,18 +811,25 @@ function tabEntry(){
   if(sg){const warn=sg.conf<60||ev.length||Math.abs(f8)>0.03;cls=warn?'warn':'go';big=warn?'ВХОД С ОСТОРОЖНОСТЬЮ':'ВХОД ВОЗМОЖЕН';sub=sideChip(sg.side)+' уверенность <b>'+sg.conf+'%</b> · '+sg.notes.join(' · ')}
   else{
     const e20=te?te.e20:null;
-    if(a.bias==='long')sub='Ждём откат к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b> и зелёную свечу. Вход от текущей цены без отката — погоня за движением.';
-    else if(a.bias==='short')sub='Ждём отскок к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b> и красную свечу. Вход от текущей цены без отскока — погоня за движением.';
+    if(a.bias==='long')sub='Ждём откат к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b> и зелёную свечу. Вход от текущей цены без отката — погоня за движением. Стакан и препятствия на пути к этому уровню — в чек-листе ниже.';
+    else if(a.bias==='short')sub='Ждём отскок к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b> и красную свечу. Вход от текущей цены без отскока — погоня за движением. Стакан и препятствия на пути к этому уровню — в чек-листе ниже.';
     else sub='Таймфреймы расходятся, направления нет. Лучше пропустить и посмотреть другую монету в сканере.';
   }
-  const obst=sg?findObstacles(coin,a,hz,sg.side,sg.entry,sg.target):[];
+  // Без активного сигнала препятствия ищем не к цели (её ещё нет), а на пути
+  // от текущей цены к ожидаемому уровню отката/отскока (EMA20) — чтобы было
+  // видно, если по дороге туда стоит стенка в стакане или крупная зона объёма,
+  // способная развернуть цену раньше, чем она дойдёт до EMA20. При лонг-тренде
+  // цена едет ЗА откатом вниз, при шорт-тренде — вверх, поэтому направление
+  // движения для findObstacles обратно тренду (bias), а не равно ему.
+  const obst=sg?findObstacles(coin,a,hz,sg.side,sg.entry,sg.target)
+    :(a.bias!=='mixed'&&te&&te.e20!=null?findObstacles(coin,a,hz,a.bias==='long'?'short':'long',cx.mark,te.e20):[]);
   return horizonSeg()
    +(S.horizon==='mid'?'<p class="note" style="margin-top:0">Среднесрочный режим: сетап на 4-часовых свечах, подтверждение — по дню и неделе, цель 3R, стоп шире, сделка может идти дни.</p>':'')
    +(S.horizon==='intraday'?'<p class="note" style="margin-top:0">Интрадей: ищем пробой диапазона последних суток (на часовых свечах) по тренду 4ч/1д. Стоп ставится за этим диапазоном — обычно несколько процентов. Цель — 3R.</p>':'')
    +'<div class="verdict '+cls+'"><div><div class="big">'+big+'</div><div style="font-size:13px;margin-top:3px">'+sub+'</div></div></div>'
    +'<ul class="chk">'+items.join('')+'</ul>'
    +(sg?'<div class="lv"><div>Вход<b>'+fmtPx(sg.entry)+'</b></div><div>Стоп<b class="dn">'+fmtPx(sg.stop)+'</b></div><div>Цель ('+sg.rr+'R)<b class="up">'+fmtPx(sg.target)+'</b></div><div>До стопа<b>'+(Math.abs(sg.entry-sg.stop)/sg.entry*100).toFixed(2)+'%</b></div></div>':'')
-   +(obst.length?'<ul class="chk">'+obst.map(o=>'<li><span class="m acc">!</span><span>На пути к цели возможное препятствие: <b>'+o.label+'</b> ≈ <b class="mono">'+fmtPx(o.price)+'</b> — цена может застрять там или развернуться раньше, чем дойдёт до тейка. Рассмотрите частичную фиксацию на этом уровне.</span></li>').join('')+'</ul>':(sg?'<p class="note">На пути к цели заметных уровней (EMA, крупные заявки в стакане, зоны объёма за год) не найдено — но стакан и зоны объёма проверены только если вы уже открывали вкладку «Стакан» для этой монеты.</p>':''))
+   +(obst.length?'<ul class="chk">'+obst.map(o=>'<li><span class="m acc">!</span><span>'+(sg?'На пути к цели':'На пути к ожидаемому уровню входа')+' возможное препятствие: <b>'+o.label+'</b> ≈ <b class="mono">'+fmtPx(o.price)+'</b> — '+(sg?'цена может застрять там или развернуться раньше, чем дойдёт до тейка. Рассмотрите частичную фиксацию на этом уровне.':'цена может развернуться об это препятствие раньше, чем дойдёт до EMA20 — откат/отскок может не состояться даже при верном тренде.')+'</span></li>').join('')+'</ul>':(sg?'<p class="note">На пути к цели заметных уровней (EMA, крупные заявки в стакане, зоны объёма за год) не найдено — но стакан и зоны объёма проверены только если вы уже открывали вкладку «Стакан» для этой монеты.</p>':''))
    +(sg?'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn pri sm" data-take="1">Я взял эту сделку — следить</button><button class="btn sm" data-sigpick="1">Заполнить вручную, без отслеживания</button><button class="btn sm" data-go="tm">Прогнать 10 000 повторов</button><button class="btn sm" data-go="risk">Посчитать размер позиции</button></div>':'')
    +'<p class="note">Это техническая подсказка по простым правилам, не прогноз и не совет. Исполнение будет хуже на спред и проскальзывание.</p>';
 }
