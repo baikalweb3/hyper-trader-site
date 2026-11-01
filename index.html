@@ -1083,6 +1083,21 @@ function portfolioRiskHTML(){
   const majorsOpen=S.pos.filter(p=>MAJORS.includes(p.coin)).map(p=>p.coin);
   return '<div class="verdict '+((naiveRiskPct>s.dailyLimit||majorsOpen.length>=2)?'warn':'go')+'" style="margin-bottom:12px"><div><div class="big" style="font-size:16px">Портфель: '+n+' позици'+(n===1?'я':n<5?'и':'й')+' под наблюдением</div><div style="font-size:13px;margin-top:3px">Если риск на каждую — '+s.riskPct+'%, суммарно под риском ≈ <b class="'+(naiveRiskPct>s.dailyLimit?'dn':'up')+'">'+naiveRiskPct.toFixed(1)+'%</b> баланса одновременно'+(majorsOpen.length>=2?'. Внимание: открыто сразу несколько крупных монет ('+majorsOpen.join(', ')+') — они обычно двигаются синхронно, реальный риск выше суммы.':'.')+'</div></div></div>';
 }
+// Реальный дневной лимит потерь: считаем не по ручной отметке "уже потеряно",
+// а автоматически — по журналу закрытых сегодня сделок (R<0), в долларах при
+// текущем риске на сделку. Ручная отметка остаётся как добавка (например, для
+// сделок, которые велись не через это приложение) — берём максимум из двух,
+// чтобы автоматический счёт нельзя было обнулить, забыв очистить поле.
+function todayLossUsd(){
+  const d=new Date();d.setHours(0,0,0,0);const cutoff=d.getTime();
+  const riskUsd=S.set.balance*S.set.riskPct/100;
+  return S.journal.filter(x=>x.closedAt>=cutoff&&x.R<0).reduce((a,x)=>a+(-x.R*riskUsd),0);
+}
+function dailyLimitState(){
+  const s=S.set,autoLost=todayLossUsd(),effLost=Math.max(s.lost||0,autoLost);
+  const limitUsd=s.balance*s.dailyLimit/100,left=Math.max(0,limitUsd-effLost);
+  return{autoLost,effLost,limitUsd,left};
+}
 function tabRisk(){
   const T=S.T;if(!T)return portfolioRiskHTML()||'<div class="empty">Выберите монету в сканере</div>';const s=S.set;
   const risk=Math.abs(T.entry-T.stop),long=T.side==='long';
@@ -1090,12 +1105,13 @@ function tabRisk(){
   const cx=S.ctx[S.sel],maxLev=cx?cx.maxLev:50;
   const useLev=Math.max(1,Math.min(maxLev,Math.ceil(lev*1.5)||1));
   const liqDist=T.entry/useLev,liq=long?T.entry-liqDist:T.entry+liqDist,liqOk=long?liq<T.stop:liq>T.stop;
-  const left=Math.max(0,s.balance*s.dailyLimit/100-s.lost),warns=[];
+  const dl=dailyLimitState(),left=dl.left,warns=[];
   if(s.riskPct>2)warns.push('Риск больше 2% на сделку: пять стопов подряд съедят 10% и более.');
   if(lev>10)warns.push('Нужное плечо выше 10×: стоп слишком узкий для такого риска.');
-  if(riskUsd>left&&s.dailyLimit>0)warns.push('Эта сделка превышает остаток дневного лимита потерь ('+left.toFixed(2)+' $).');
+  if(riskUsd>left&&s.dailyLimit>0)warns.push('Эта сделка превышает остаток дневного лимита потерь ('+left.toFixed(2)+' $). При нажатии «Взять сделку» приложение спросит подтверждение.');
   if(!liqOk)warns.push('Ликвидация ближе стопа при плече '+useLev+'×. Снизьте плечо.');
-  return portfolioRiskHTML()+ticketForm()+'<div class="form"><label>Баланс, $<input id="rBal" inputmode="decimal" value="'+s.balance+'"></label><label>Риск на сделку, %<input id="rPct" inputmode="decimal" value="'+s.riskPct+'"></label><label>Дневной лимит потерь, %<input id="rDay" inputmode="decimal" value="'+s.dailyLimit+'"></label><label>Уже потеряно сегодня, $<input id="rLost" inputmode="decimal" value="'+s.lost+'"></label></div>'
+  return portfolioRiskHTML()+ticketForm()+'<div class="form"><label>Баланс, $<input id="rBal" inputmode="decimal" value="'+s.balance+'"></label><label>Риск на сделку, %<input id="rPct" inputmode="decimal" value="'+s.riskPct+'"></label><label>Дневной лимит потерь, %<input id="rDay" inputmode="decimal" value="'+s.dailyLimit+'"></label><label>Доп. потери вне приложения, $<input id="rLost" inputmode="decimal" value="'+s.lost+'"></label></div>'
+   +'<p class="note">Автоматически посчитано по журналу закрытых сегодня сделок: <b class="'+(dl.autoLost>0?'dn':'')+'">'+dl.autoLost.toFixed(2)+' $</b>. Итоговый расход дня (с учётом поля выше): <b class="'+(dl.effLost>0?'dn':'')+'">'+dl.effLost.toFixed(2)+' $</b> из лимита '+dl.limitUsd.toFixed(2)+' $.</p>'
    +'<div class="lv"><div>Риск на стопе<b class="dn">'+riskUsd.toFixed(2)+' $</b></div><div>Размер позиции<b>'+(size>=1?size.toFixed(3):size.toPrecision(3))+' '+S.sel+'</b></div><div>Объём, $<b>'+notional.toFixed(2)+'</b></div><div>Нужное плечо<b>'+lev.toFixed(2)+'×</b></div>'
    +'<div>Маржа при '+useLev+'×<b>'+(notional/useLev).toFixed(2)+' $</b></div><div>Ликвидация ≈<b class="'+(liqOk?'':'dn')+'">'+fmtPx(liq)+'</b></div><div>Остаток лимита дня<b>'+left.toFixed(2)+' $</b></div><div>Цель '+Math.abs((T.target-T.entry)/risk||0).toFixed(1)+'R<b class="up">+'+(riskUsd*Math.abs((T.target-T.entry)/risk||0)).toFixed(2)+' $</b></div></div>'
    +(warns.length?'<ul class="chk">'+warns.map(w=>'<li><span class="m dn">!</span><span>'+w+'</span></li>').join('')+'</ul>':'<ul class="chk"><li><span class="m up">✓</span><span>Размер в пределах правил: риск до 2%, ликвидация дальше стопа, дневной лимит не превышен.</span></li></ul>')
@@ -1330,6 +1346,11 @@ $('#dBody').addEventListener('click',e=>{
     if(sg){
       setTicket({coin:sg.coin,side:sg.side,entry:sg.entry,stop:sg.stop,target:sg.target,from:HORIZONS[hk].label,kind:sg.kind});
       const T=S.T,risk=Math.abs(T.entry-T.stop),long=T.side==='long';
+      const s=S.set,riskUsd=s.balance*s.riskPct/100,dl=dailyLimitState();
+      if(s.dailyLimit>0&&riskUsd>dl.left){
+        const over=confirm('Дневной лимит потерь почти или уже исчерпан: остаток '+dl.left.toFixed(2)+' $, а риск этой сделки '+riskUsd.toFixed(2)+' $ (сегодня уже потеряно '+dl.effLost.toFixed(2)+' $ из лимита '+dl.limitUsd.toFixed(2)+' $).\n\nВсё равно взять сделку?');
+        if(!over)return;
+      }
       S.pos.push({id:Date.now().toString(36),coin:S.sel,side:T.side,entry:T.entry,stop:T.stop,target:T.target,t1:long?T.entry+risk:T.entry-risk,t2:long?T.entry+2*risk:T.entry-2*risk,done:[]});
       store.set('pos',S.pos);
       S.tab='exit';renderTab();drawMain();
