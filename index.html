@@ -1145,7 +1145,27 @@ function bindRisk(){
 function statBlock(rows,title,hint){
   if(!rows.length)return '<p class="note">'+hint+'</p>';
   const wins=rows.filter(x=>x.R>0).length,wr=wins/rows.length*100,avgR=rows.reduce((a,x)=>a+x.R,0)/rows.length,totR=rows.reduce((a,x)=>a+x.R,0);
-  return '<div class="lv"><div>Сделок<b>'+rows.length+'</b></div><div>Доля в плюс<b class="'+(wr>=50?'up':'dn')+'">'+wr.toFixed(0)+'%</b></div><div>Средний результат<b class="'+(avgR>=0?'up':'dn')+'">'+(avgR>=0?'+':'')+avgR.toFixed(2)+' R</b></div><div>Суммарно<b class="'+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</b></div></div>';
+  const last20=rows.slice(0,20),wr20=last20.length?last20.filter(x=>x.R>0).length/last20.length*100:null;
+  return '<div class="lv"><div>Сделок<b>'+rows.length+'</b></div><div>Доля в плюс<b class="'+(wr>=50?'up':'dn')+'">'+wr.toFixed(0)+'%</b></div><div>Средний результат<b class="'+(avgR>=0?'up':'dn')+'">'+(avgR>=0?'+':'')+avgR.toFixed(2)+' R</b></div><div>Суммарно<b class="'+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</b></div>'
+   +(wr20!==null?'<div>Доля в плюс, последние '+last20.length+'<b class="'+(wr20>=50?'up':'dn')+'">'+wr20.toFixed(0)+'%</b></div>':'')+'</div>';
+}
+// Кривая капитала: накопленная сумма R по сделкам, от самой старой к самой
+// новой (rows приходят отсортированными от новой к старой, поэтому для
+// графика их нужно развернуть).
+function drawEquity(cv,rows){
+  if(!cv||!rows.length)return;
+  const chron=rows.slice().reverse();
+  const{g,w,h}=setupCanvas(cv);const padR=56,padB=20,padT=8,padL=6;g.clearRect(0,0,w,h);
+  const cG=css('--line'),cM=css('--mut'),cU=css('--long'),cD=css('--short');
+  let cum=0;const pts=[0];for(const x of chron){cum+=x.R;pts.push(cum)}
+  let lo=Math.min(0,...pts),hi=Math.max(0,...pts);if(lo===hi){lo-=1;hi+=1}
+  const pad=(hi-lo)*0.08||1;lo-=pad;hi+=pad;
+  const X=i=>padL+i*(w-padL-padR)/(pts.length-1||1),Y=v=>padT+(hi-v)/(hi-lo)*(h-padT-padB);
+  g.font='11px '+css('--mono');g.textBaseline='middle';
+  niceTicks(lo,hi,4).forEach(v=>{const y=Y(v);g.strokeStyle=cG;g.globalAlpha=.5;g.beginPath();g.moveTo(padL,y);g.lineTo(w-padR,y);g.stroke();g.globalAlpha=1;g.fillStyle=cM;g.textAlign='left';g.fillText((v>=0?'+':'')+v.toFixed(1)+'R',w-padR+6,y)});
+  const zy=Y(0);g.strokeStyle=cM;g.globalAlpha=.6;g.beginPath();g.moveTo(padL,zy);g.lineTo(w-padR,zy);g.stroke();g.globalAlpha=1;
+  const lastV=pts[pts.length-1];
+  g.strokeStyle=lastV>=0?cU:cD;g.lineWidth=2;g.beginPath();pts.forEach((v,i)=>{i?g.lineTo(X(i),Y(v)):g.moveTo(X(i),Y(v))});g.stroke();g.lineWidth=1;
 }
 function tabJournal(){
   resolveSigTrack();
@@ -1154,6 +1174,7 @@ function tabJournal(){
   return '<div class="mut" style="font-size:12px;margin-bottom:8px">Здесь две разные вещи. «Ваши сделки» — всё, что вы ставили «следить» на вкладке «Выход»: приложение само закрывает их в журнал, когда цена реально доходит до стопа или цели (пока эта страница открыта на устройстве), плюс то, что вы закрыли вручную. «Статистика по сигналам» — автоматическая и беспристрастная: приложение само запоминает каждый сигнал, который выдало, и само проверяет цену — независимо от того, торговали вы это или нет.</div>'
    +'<h3 style="margin:14px 0 6px;font-size:14px">Ваши сделки ('+jr.length+')</h3>'
    +statBlock(jr,'',jr.length?'':'Пока пусто. Нажмите «Следить за позицией» на вкладке «Выход» — когда цена дойдёт до стопа или цели, сделка сама появится здесь с результатом.')
+   +(jr.length>=2?'<canvas id="equity" style="height:140px;margin-top:8px"></canvas><p class="note" style="margin-top:4px">Кривая капитала: сумма R нарастающим итогом от первой сделки до последней.</p>':'')
    +(jr.length?'<div class="bars" style="margin-top:8px">'+jr.slice(0,40).map(x=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(x.side)+' '+x.coin+(x.auto?' <span class="mut" style="font-size:11px">· авто: '+x.reason+'</span>':' <span class="mut" style="font-size:11px">· закрыто вручную</span>')+'<span class="grow"></span><span class="mono '+(x.R>=0?'up':'dn')+'">'+(x.R>=0?'+':'')+x.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(x.entry)+' → выход '+fmtPx(x.exit)+' · '+new Date(x.closedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>'+(jr.length?'<button class="btn sm" id="jClear" style="margin-top:8px">Очистить журнал сделок</button>':''):'')
    +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Статистика по сигналам движка ('+resolved.length+' из '+S.sigTrack.length+', '+pending+' ещё не завершились)</h3>'
    +statBlock(resolved,'','Пока нет завершившихся сигналов — статистика появится по мере работы приложения.')
@@ -1161,6 +1182,7 @@ function tabJournal(){
 }
 function bindJournal(){
   const c=$('#jClear');if(c)c.onclick=()=>{if(confirm('Удалить весь журнал ваших сделок? Статистика по сигналам не затронется.')){S.journal=[];store.set('journal',[]);renderTab()}};
+  drawEquity($('#equity'),S.journal);
 }
 
 
@@ -1392,7 +1414,7 @@ $('#dlgForm').onsubmit=e=>{
   for(const k in cache)delete cache[k];S.an={};boot();
 };
 $('#scanSearch').addEventListener('input',e=>{S.scanFilter=e.target.value;renderScan()});
-window.addEventListener('resize',()=>{if(S.tm&&S.tab==='tm'){const f=$('#fan');if(f)drawFan(f,S.tm.fan,S.T,S.tm.H,'15m')}});
+window.addEventListener('resize',()=>{if(S.tm&&S.tab==='tm'){const f=$('#fan');if(f)drawFan(f,S.tm.fan,S.T,S.tm.H,'15m')}if(S.tab==='journal'){const eq=$('#equity');if(eq)drawEquity(eq,S.journal)}});
 $('#bLogout').onclick=()=>{S.auth=null;store.set('auth',null);location.reload()};
 function applyAuthUI(){
   $('#whoami').textContent=S.auth?S.auth.username:'';
