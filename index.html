@@ -936,7 +936,7 @@ async function scanAllBacktest(hz,capN,regimeFilter){
   return {all,byCoin,half1,half2,coinsScanned:coins.length};
 }
 function bindTM(){
-  $$('#dBody input,#dBody select').forEach(e=>e.addEventListener('change',()=>{readTicket();S.tmH=Math.min(240,Math.max(1,+$('#tmH').value||24));S.tmD=$('#tmD').value==='1';drawMain()}));
+  $$('#dBody input,#dBody select').forEach(e=>e.addEventListener('change',()=>{readTicket();S.tmH=Math.min(240,Math.max(1,+$('#tmH').value||24));S.tmD=$('#tmD').value==='1';renderTab();drawMain()}));
   $('#tmRun').onclick=async()=>{
     readTicket();const er=ticketErr(),out=$('#tmOut');if(er){out.innerHTML='<p class="note dn">'+er+'</p>';return}
     S.tmH=Math.min(240,Math.max(1,+$('#tmH').value||24));S.tmD=$('#tmD').value==='1';

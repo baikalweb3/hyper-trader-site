@@ -139,4 +139,11 @@ export default async () => {
   return new Response('ok, new signals: ' + fresh.length, { status: 200 });
 };
 
-export const config = { schedule: '*/10 * * * *' };
+// Расписание ('*/10 * * * *') СНЯТО: TG_TOKEN/TG_CHAT в переменных
+// окружения сайта не настроены, а значит каждый из 144 запусков в день
+// уходил впустую — функция сразу выходила, но сам запуск всё равно
+// списывался с кредитов Netlify (это одна из причин, почему кредиты
+// кончились раньше цикла). Как только в Site settings → Environment
+// variables появятся TG_TOKEN и TG_CHAT (токен Telegram-бота и chat_id),
+// верни строку ниже — и фоновые сигналы в Telegram снова заработают:
+// export const config = { schedule: '*/10 * * * *' };
