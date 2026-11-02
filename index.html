@@ -742,7 +742,7 @@ async function bindAdmin(){
     const r=await apiCall('admin',{headers:{'Authorization':'Bearer '+S.auth.token}});
     if(!r.users||!r.users.length){box.innerHTML='<p class="note">Пока никто кроме тебя не регистрировался.</p>';return}
     box.innerHTML=r.users.map(u=>{
-      const last5=(u.lastTrades||[]).map(t=>'<div class="l" style="display:flex;gap:8px"><span>'+t.coin+'</span><span class="'+(t.R>=0?'up':'dn')+'">'+(t.R>=0?'+':'')+(t.R||0).toFixed(2)+' R</span></div>').join('');
+      const last5=(u.lastTrades||[]).map(t=>'<div class="l" style="display:flex;gap:8px"><span>'+esc(t.coin)+'</span><span class="'+(t.R>=0?'up':'dn')+'">'+(t.R>=0?'+':'')+(t.R||0).toFixed(2)+' R</span></div>').join('');
       return '<div class="card" style="cursor:default;margin-bottom:8px"><div class="h"><b>'+esc(u.username)+'</b>'+(u.isAdmin?' <span class="mut" style="font-size:11px">· админ</span>':'')+'<span class="grow"></span><span class="mut" style="font-size:12px">заходил: '+new Date(u.lastLogin).toLocaleString('ru-RU')+'</span></div>'
        +'<div class="lv"><div>Регистрация<b style="font-size:12px">'+new Date(u.createdAt).toLocaleDateString('ru-RU')+'</b></div><div>Сделок в журнале<b>'+u.trades+'</b></div><div>Доля в плюс<b class="'+(u.winPct>=50?'up':'dn')+'">'+(u.winPct==null?'—':u.winPct+'%')+'</b></div><div>Суммарно R<b class="'+(u.totalR>=0?'up':'dn')+'">'+(u.totalR>=0?'+':'')+u.totalR+'</b></div></div>'
        +(last5?'<div style="margin-top:6px">'+last5+'</div>':'')+'</div>';

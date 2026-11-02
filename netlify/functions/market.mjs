@@ -13,12 +13,20 @@ function json(obj, status) {
 // index.html одинаково работала и для крипты, и для TradFi.
 const TF_MS = { '60m': 3600e3, '1d': 86400e3, '1wk': 7 * 86400e3 };
 
+// Эта функция не требует логина (вкладка TradFi открыта для всех) — то есть
+// без ограничений это открытый анонимный прокси: любой может дёргать её
+// с любым symbol/range и греть наши кредиты Netlify чужим трафиком к Yahoo.
+// Раз весь список инструментов в приложении и так фиксирован (index.html,
+// TRADFI_SYMS), просто не пропускаем ничего, кроме него.
+const ALLOWED_SYMBOLS = new Set(['CL=F','BZ=F','GC=F','SI=F','^GSPC','^IXIC','^DJI','AAPL','MSFT','NVDA','TSLA']);
+
 async function handle(req) {
   const url = new URL(req.url);
   const symbol = url.searchParams.get('symbol');
   const interval = url.searchParams.get('interval') || '1d';
   const range = url.searchParams.get('range') || '6mo';
   if (!symbol) return json({ error: 'нужен параметр symbol' }, 400);
+  if (!ALLOWED_SYMBOLS.has(symbol)) return json({ error: 'символ не в списке поддерживаемых' }, 400);
   if (!TF_MS[interval]) return json({ error: 'неизвестный interval' }, 400);
 
   const yUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol)
