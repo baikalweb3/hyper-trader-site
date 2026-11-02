@@ -194,8 +194,12 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <main class="grid" id="grid" data-view="scan">
   <section class="panel" id="pScan">
     <div class="ph"><h2>Сканер</h2><span class="mut" style="font-size:12px" id="scanMeta"></span></div>
-    <div style="padding:8px 14px 0"><input id="scanSearch" placeholder="поиск по всем монетам Hyperliquid…" style="width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;color:var(--fg);font-family:var(--mono)"></div>
-    <div style="overflow-x:auto"><table class="scan" id="scanT"><thead><tr><th>Монета</th><th class="r">Цена</th><th class="r">24ч</th><th style="white-space:nowrap">15м·1ч·4ч</th><th class="hide-s">Тренд</th></tr></thead><tbody></tbody></table></div>
+    <div style="padding:8px 14px 0"><div class="seg" id="marketSeg"><button data-mk="crypto" class="on">Крипто</button><button data-mk="tradfi">TradFi</button></div></div>
+    <div id="cryptoScan">
+      <div style="padding:8px 14px 0"><input id="scanSearch" placeholder="поиск по всем монетам Hyperliquid…" style="width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;color:var(--fg);font-family:var(--mono)"></div>
+      <div style="overflow-x:auto"><table class="scan" id="scanT"><thead><tr><th>Монета</th><th class="r">Цена</th><th class="r">24ч</th><th style="white-space:nowrap">15м·1ч·4ч</th><th class="hide-s">Тренд</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div id="tradfiScan" style="display:none"></div>
   </section>
 
   <section class="panel" id="pDetail">
@@ -204,7 +208,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
       <div style="padding:2px 4px 6px"><span class="mut" style="font-size:12px">график TradingView — тяните мышью, крутите колесо для зума, слева своя панель рисования (Фибо и другое). Цены входа/стопа/тейка смотрите на вкладках «Вход» и «Риск» ниже.</span></div>
       <div id="tvchart" style="height:440px;border-radius:8px;overflow:hidden"></div>
     </div>
-    <nav class="tabs" id="dTabs"><button data-t="entry" class="on">Вход</button><button data-t="tm">Time Machine</button><button data-t="exit">Выход</button><button data-t="risk">Риск</button><button data-t="walls">Стакан</button><button data-t="tape">Сделки</button><button data-t="journal">Журнал</button><button data-t="admin" id="tAdmin" hidden>Админ</button></nav>
+    <nav class="tabs" id="dTabs"><button data-t="entry" class="on">Вход</button><button data-t="tm">Time Machine</button><button data-t="exit">Выход</button><button data-t="risk">Риск</button><button data-t="walls">Стакан</button><button data-t="whales">Киты</button><button data-t="tape">Сделки</button><button data-t="journal">Журнал</button><button data-t="admin" id="tAdmin" hidden>Админ</button></nav>
     <div class="pb" id="dBody"></div>
   </section>
 
@@ -258,7 +262,9 @@ const S={
   ctx:{}, an:{}, sel:'BTC', tf:'15m', tab:'entry', feed:'sig', view:'scan',
   sigs:store.get('sigs',[]), seen:new Set(store.get('seen',[])), events:[], news:[], newsErr:[], newsAt:0, anStore:{mid:{},intraday:{}}, horizon:'short', sigTrack:store.get('sigTrack',[]), journal:store.get('journal',[]),
   pos:store.get('pos',[]), T:null, book:{}, tm:null, status:'init', lastCtx:0, lastScan:0, errs:0, oiHist:{},
-  auth:store.get('auth',null)
+  auth:store.get('auth',null),
+  whales:store.get('whales',[]), whaleData:{},
+  market:'crypto', tfAn:{}
 };
 const saveSet=()=>store.set('set',S.set);
 
@@ -336,7 +342,7 @@ async function refreshCtx(){
   S.ctx=out;S.lastCtx=Date.now();
   pushOiHist(out);
 }
-function universe(){return Object.entries(S.ctx).sort((a,b)=>b[1].vol-a[1].vol).map(e=>e[0])}
+function universe(){return Object.entries(S.ctx).filter(e=>!TRADFI_SET.has(e[0])).sort((a,b)=>b[1].vol-a[1].vol).map(e=>e[0])}
 function watch(){
   const own=(S.set.coins||'').toUpperCase().split(/[\s,]+/).filter(x=>S.ctx[x]);
   const topN=universe().slice(0,S.set.watchN||20);
@@ -591,7 +597,7 @@ function ticketFor(coin){
 function rp(x){const a=Math.abs(x);return +x.toFixed(a>=1000?2:a>=100?3:a>=10?4:a>=1?5:7)}
 function setTicket(t){if(t){['entry','stop','target'].forEach(k=>t[k]=rp(t[k]))}S.T=t;S.tm=null}
 function selectCoin(coin,keepTicket){
-  S.sel=coin;
+  S.sel=coin;S.lastCryptoSel=coin;S.market='crypto';
   if(!keepTicket)setTicket(ticketFor(coin));
   S.book[coin]=S.book[coin]||null;startTape(coin);
   renderScan();renderDetailFrame();
@@ -709,6 +715,7 @@ function liveRText(){
 
 /* --- вкладки --- */
 function renderTab(){
+  if(S.market==='tradfi')return; // у TradFi свой рендер (renderTradfiDetail), эти вкладки её не трогают
   const el=$('#dBody');
   $$('#dTabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===S.tab));
   if(!S.ctx[S.sel]){el.innerHTML='';return}
@@ -723,6 +730,7 @@ function renderTab(){
   else if(S.tab==='tape')el.innerHTML='<div id="tapeBox"></div>',renderTape();
   else if(S.tab==='journal')el.innerHTML=tabJournal(),bindJournal();
   else if(S.tab==='admin')el.innerHTML=tabAdmin(),bindAdmin();
+  else if(S.tab==='whales')el.innerHTML=tabWhales(),bindWhales();
   else el.innerHTML=tabRisk(),bindRisk();
 }
 function tabAdmin(){
@@ -740,6 +748,55 @@ async function bindAdmin(){
        +(last5?'<div style="margin-top:6px">'+last5+'</div>':'')+'</div>';
     }).join('');
   }catch(e){box.innerHTML='<p class="note dn">Не удалось загрузить: '+esc(e.message||e)+'</p>'}
+}
+/* ============ Киты: слежка за публичными позициями кошельков Hyperliquid ============
+   Hyperliquid полностью on-chain — позиции ЛЮБОГО адреса публичны через тот же
+   info-API, которым уже пользуется весь сайт (никакого отдельного бэкенда не
+   нужно). Автопоиска «кто сейчас кит» тут нет и не будет: невозможно честно
+   определить это без стороннего скрейпинга чужого лидерборда, а выдавать
+   случайный список адресов за «топ-трейдеров» — вводить в заблуждение. Вместо
+   этого — свой список: добавляешь адрес кошелька (например, найденный на
+   app.hyperliquid.xyz/leaderboard), приложение показывает его открытые
+   позиции и обновляет при каждом заходе на вкладку. */
+function isAddr(x){return /^0x[0-9a-fA-F]{40}$/.test((x||'').trim())}
+async function fetchWhale(addr){
+  try{
+    const st=await post({type:'clearinghouseState',user:addr});
+    const rows=(st.assetPositions||[]).map(p=>p.position).filter(p=>p&&+p.szi!==0).map(p=>({
+      coin:p.coin,szi:+p.szi,entry:+p.entryPx,upnl:+p.unrealizedPnl,lev:p.leverage?p.leverage.value:null,value:Math.abs(+p.positionValue||0)
+    })).sort((a,b)=>b.value-a.value);
+    const eq=st.marginSummary?+st.marginSummary.accountValue:null;
+    S.whaleData[addr]={rows,eq,at:Date.now(),err:null};
+  }catch(e){S.whaleData[addr]={rows:[],eq:null,at:Date.now(),err:e.message||String(e)}}
+}
+function tabWhales(){
+  const form='<div class="form" style="margin-bottom:8px"><label>Адрес кошелька (0x…)<input id="wAddr" inputmode="text" placeholder="0x..."></label><label>Метка (необязательно)<input id="wLabel" placeholder="например, кит BTC"></label><label>&nbsp;<button class="btn pri" id="wAdd" type="button">Добавить и следить</button></label></div>';
+  if(!S.whales.length)return form+'<div class="empty">Список пуст. Вставь публичный адрес кошелька Hyperliquid (0x…) — например, со страницы app.hyperliquid.xyz/leaderboard — и приложение покажет его текущие открытые позиции.</div>';
+  const cards=S.whales.map(w=>{
+    const d=S.whaleData[w.addr];
+    let body;
+    if(!d)body='<p class="note">Загружаю…</p>';
+    else if(d.err)body='<p class="note dn">Не удалось загрузить: '+esc(d.err)+'</p>';
+    else if(!d.rows.length)body='<p class="note">Открытых позиций нет (или кошелёк не торговал на перпетуалах).</p>';
+    else body='<table class="scan"><thead><tr><th>Монета</th><th>Сторона</th><th class="r">Объём</th><th class="r">Вход</th><th class="r">PnL</th><th class="r">Плечо</th></tr></thead><tbody>'
+      +d.rows.map(r=>'<tr style="cursor:default'+(r.coin===S.sel?';box-shadow:inset 3px 0 0 var(--acc)':'')+'"><td class="coin">'+esc(r.coin)+'</td><td class="'+(r.szi>0?'up':'dn')+'">'+(r.szi>0?'лонг':'шорт')+'</td><td class="r mono">'+fmtUsd(r.value)+'</td><td class="r mono">'+fmtPx(r.entry)+'</td><td class="r mono '+(r.upnl>=0?'up':'dn')+'">'+(r.upnl>=0?'+':'')+fmtUsd(r.upnl)+'</td><td class="r mono">'+(r.lev?r.lev+'×':'—')+'</td></tr>').join('')
+      +'</tbody></table>';
+    return '<div class="card" style="cursor:default;margin-bottom:8px"><div class="h"><b>'+esc(w.label||((w.addr||'').slice(0,6)+'…'+(w.addr||'').slice(-4)))+'</b><span class="mut" style="font-size:11px;margin-left:6px">'+esc(w.addr)+'</span><span class="grow"></span>'+(d&&d.eq!=null?'<span class="mut" style="font-size:12px">баланс ≈ '+fmtUsd(d.eq)+'</span>':'')+'<button class="btn sm" data-wrm="'+esc(w.addr)+'" style="margin-left:8px">Убрать</button></div>'+body+'</div>';
+  }).join('');
+  return form+'<p class="note" style="margin-top:0">Строки, где монета совпадает с выбранной сейчас слева, подсвечены. Это не финансовый совет и не копитрейдинг в один клик — просто видно, что держат эти конкретные адреса прямо сейчас.</p>'+cards;
+}
+function bindWhales(){
+  $('#wAdd').onclick=()=>{
+    const addr=($('#wAddr').value||'').trim(),label=($('#wLabel').value||'').trim();
+    if(!isAddr(addr)){alert('Это не похоже на адрес кошелька (нужен формат 0x + 40 символов)');return}
+    if(S.whales.some(w=>w.addr.toLowerCase()===addr.toLowerCase())){alert('Этот адрес уже отслеживается');return}
+    S.whales.push({addr,label});store.set('whales',S.whales);renderTab();
+    fetchWhale(addr).then(()=>{if(S.tab==='whales')renderTab()});
+  };
+  $$('[data-wrm]').forEach(b=>b.onclick=()=>{
+    S.whales=S.whales.filter(w=>w.addr!==b.dataset.wrm);store.set('whales',S.whales);renderTab();
+  });
+  S.whales.forEach(w=>{if(!S.whaleData[w.addr]||Date.now()-S.whaleData[w.addr].at>30000)fetchWhale(w.addr).then(()=>{if(S.tab==='whales')renderTab()})});
 }
 function sideChip(s){return '<span class="chip '+s+'">'+(s==='long'?'ЛОНГ':'ШОРТ')+'</span>'}
 function findObstacles(coin,a,hz,side,entry,target){
@@ -1258,6 +1315,126 @@ function renderTape(){
    +'<p class="note">Покупка — сделка по цене продавца (давит покупатель), продажа — по цене покупателя. Перекос больше 65–70% в одну сторону показывает, кто сейчас давит. Это дополнение к сигналу, а не сигнал.</p>';
 }
 
+/* ============ TradFi: нефть, металлы, индексы, акции ============
+   Hyperliquid торгует только крипто-перпетуалами, так что для этого
+   нужен отдельный источник данных — Yahoo Finance через свой прокси
+   (netlify/functions/market.mjs, см. там же почему прокси вообще нужен).
+   Специально сделано ИЗОЛИРОВАННО от всей остальной крипто-логики
+   (свой кэш свечей, свой анализ, своя панель) — чтобы ничего здесь не
+   могло случайно сломать уже работающий и проверенный крипто-сканер.
+   Один горизонт на все инструменты (часовые/дневные/недельные свечи:
+   биржевые часы делают интрадей-горизонты вроде 15м/4ч на Yahoo
+   малонадёжными из-за разрывов в торговые паузы). */
+const TRADFI_SYMS=[
+  {sym:'CL=F',name:'Нефть WTI'},{sym:'BZ=F',name:'Нефть Brent'},
+  {sym:'GC=F',name:'Золото'},{sym:'SI=F',name:'Серебро'},
+  {sym:'^GSPC',name:'S&P 500'},{sym:'^IXIC',name:'Nasdaq'},{sym:'^DJI',name:'Dow Jones'},
+  {sym:'AAPL',name:'Apple'},{sym:'MSFT',name:'Microsoft'},{sym:'NVDA',name:'Nvidia'},{sym:'TSLA',name:'Tesla'}
+];
+const TRADFI_SET=new Set(TRADFI_SYMS.map(s=>s.sym));
+const TRADFI_TF={'1h':{yi:'60m',yr:'3mo'},'1d':{yi:'1d',yr:'2y'},'1wk':{yi:'1wk',yr:'10y'}};
+const TRADFI_HZ={tfs:['1h','1d','1wk'],entryTf:'1h',rr:2,names:{'1h':'1ч','1d':'1д','1wk':'1н'},label:'TradFi'};
+const tfCache={};
+async function getTradfiCandles(sym,tf){
+  const key=sym+tf,c=tfCache[key];
+  if(c&&Date.now()-c.at<(tf==='1h'?120000:600000))return c.data;
+  const cfg=TRADFI_TF[tf];
+  const r=await fetch('/.netlify/functions/market?symbol='+encodeURIComponent(sym)+'&interval='+cfg.yi+'&range='+cfg.yr);
+  const j=await r.json();
+  if(!r.ok||j.error)throw new Error(j.error||('HTTP '+r.status));
+  tfCache[key]={at:Date.now(),data:j.candles,meta:j.meta};
+  return j.candles;
+}
+// Тот же разбор сигналов, что и у крипты (общие чистые функции trendState/
+// pullbackSignal/breakoutSignal), с той же формулой уверенности — только
+// funding здесь всегда 0 (у акций/нефти/индексов нет funding rate у перпа).
+async function analyzeTradfi(sym){
+  const T=TRADFI_HZ.tfs,O={sym,tf:{},align:0,sigs:[]};
+  for(const tf of T){
+    const cs=closed(await getTradfiCandles(sym,tf));
+    const st=trendState(cs);O.tf[tf]=st;O.align+=st?st.score:0;
+  }
+  O.bias=O.align>=4?'long':O.align<=-4?'short':'mixed';
+  const hA=O.tf[T[1]],hB=O.tf[T[2]];
+  O.htf=(hA&&hB&&hA.score>=2&&hB.score>=0)?'long':(hA&&hB&&hA.score<=-2&&hB.score<=0)?'short':null;
+  const ce=closed(await getTradfiCandles(sym,TRADFI_HZ.entryTf));
+  for(const fn of [pullbackSignal,breakoutSignal]){
+    const s=fn(ce);if(!s)continue;if(O.htf&&O.htf!==s.side)continue;
+    const risk=Math.abs(s.entry-s.stop);if(!risk)continue;
+    let w=40,notes=[];
+    if(O.htf===s.side){w+=15;notes.push(TRADFI_HZ.names[T[1]]+' и '+TRADFI_HZ.names[T[2]]+' идут в ту же сторону')}else notes.push('старшие таймфреймы без чёткого направления');
+    if((s.side==='long'&&O.align>=6)||(s.side==='short'&&O.align<=-6)){w+=10;notes.push('все три таймфрейма согласны')}
+    const vr=O.tf[TRADFI_HZ.entryTf]?O.tf[TRADFI_HZ.entryTf].vr:null;
+    if(vr&&vr>1.3){w+=10;notes.push('объём выше среднего ×'+vr.toFixed(1))}
+    const r=O.tf[TRADFI_HZ.entryTf]?O.tf[TRADFI_HZ.entryTf].rsi:null;
+    if(r!=null&&((s.side==='long'&&r>72)||(s.side==='short'&&r<28))){w-=15;notes.push('RSI перегрет: поздний вход')}
+    w=Math.max(5,Math.min(95,w));
+    const target=s.side==='long'?s.entry+TRADFI_HZ.rr*risk:s.entry-TRADFI_HZ.rr*risk;
+    O.sigs.push({side:s.side,entry:s.entry,stop:s.stop,target,rr:TRADFI_HZ.rr,conf:w,notes,kind:fn===pullbackSignal?'pullback':'breakout'});
+  }
+  return O;
+}
+async function refreshTradfiCtx(){
+  await Promise.all(TRADFI_SYMS.map(async({sym})=>{
+    try{
+      const cs=await getTradfiCandles(sym,'1d');
+      if(!cs.length)return;
+      const last=cs[cs.length-1],prev=cs.length>1?cs[cs.length-2]:last;
+      S.ctx[sym]={maxLev:5,funding:0,oi:0,vol:(last.v||0)*last.c,mark:last.c,prev:prev.c};
+    }catch(e){}
+  }));
+}
+function renderTradfiScan(){
+  const el=$('#tradfiScan');if(!el)return;
+  el.innerHTML='<div style="overflow-x:auto"><table class="scan"><thead><tr><th>Инструмент</th><th class="r">Цена</th><th class="r">Изм.</th></tr></thead><tbody>'
+   +TRADFI_SYMS.map(({sym,name})=>{
+     const cx=S.ctx[sym];
+     if(!cx)return '<tr style="cursor:pointer" data-tf="'+sym+'"><td class="coin">'+name+'<div class="mut" style="font-size:11px">'+sym+'</div></td><td class="r mono mut">…</td><td class="r mono mut">…</td></tr>';
+     const chg=cx.prev?(cx.mark/cx.prev-1)*100:0;
+     return '<tr style="cursor:pointer" data-tf="'+sym+'" class="'+(S.sel===sym?'sel':'')+'"><td class="coin">'+name+'<div class="mut" style="font-size:11px">'+sym+'</div></td><td class="r mono">'+fmtPx(cx.mark)+'</td><td class="r mono '+(chg>=0?'up':'dn')+'">'+fmtPct(chg)+'</td></tr>';
+   }).join('')+'</tbody></table></div>'
+   +'<p class="note" style="margin:8px 14px">Данные — Yahoo Finance, с задержкой. Анализ тот же алгоритм, что и для крипты (откат/пробой по тренду на 1ч/1д/1н), но без стакана, открытого интереса и funding — для этих рынков их просто не существует в том же виде.</p>';
+  $$('[data-tf]',el).forEach(tr=>tr.onclick=()=>selectTradfi(tr.dataset.tf));
+}
+async function selectTradfi(sym){
+  S.sel=sym;S.market='tradfi';
+  $('#dHead').innerHTML='<div class="empty" style="width:100%">Считаю анализ для '+sym+'…</div>';
+  renderTradfiScan();
+  try{
+    const a=await analyzeTradfi(sym);
+    S.tfAn[sym]=a;
+    if(S.sel===sym)renderTradfiDetail(sym,a);
+  }catch(e){
+    if(S.sel===sym)$('#dHead').innerHTML='<div class="empty" style="width:100%">Не удалось загрузить '+sym+': '+esc(e.message||e)+'</div>';
+  }
+}
+function renderTradfiDetail(sym,a){
+  const info=TRADFI_SYMS.find(x=>x.sym===sym),cx=S.ctx[sym];
+  const sg=a.sigs[0],te=a.tf[TRADFI_HZ.entryTf];
+  $('#dHead').innerHTML='<h1>'+(info?info.name:sym)+' <span class="mut" style="font-size:13px">'+sym+'</span></h1>'+(cx?'<div class="px">'+fmtPx(cx.mark)+'</div>':'');
+  const items=[];
+  const L=(ok,txt)=>items.push('<li><span class="m '+(ok===true?'up':ok===false?'dn':'acc')+'">'+(ok===true?'✓':ok===false?'✕':'!')+'</span><span>'+txt+'</span></li>');
+  L(a.bias!=='mixed'?true:null,'Тренд по таймфреймам: '+TRADFI_HZ.tfs.map(tf=>TRADFI_HZ.names[tf]+' '+(a.tf[tf]?(a.tf[tf].score>0?'↑':a.tf[tf].score<0?'↓':'→'):'?')).join(' · ')+' — '+(a.bias==='long'?'общий лонг':a.bias==='short'?'общий шорт':'единой картины нет'));
+  L(sg?true:false,sg?('Сетап на '+TRADFI_HZ.names[TRADFI_HZ.entryTf]+': '+(sg.kind==='pullback'?'откат к EMA20 по тренду':'пробой 20-свечного диапазона на повышенном объёме')):'Сетапа на '+TRADFI_HZ.names[TRADFI_HZ.entryTf]+' сейчас нет');
+  if(te&&te.vr)L(te.vr>=1?true:null,'Объём последней свечи ×'+te.vr.toFixed(1)+' от среднего');
+  let cls='wait',big='ЖДАТЬ',sub='';
+  if(sg){const warn=sg.conf<60;cls=warn?'warn':'go';big=warn?'ВХОД С ОСТОРОЖНОСТЬЮ':'ВХОД ВОЗМОЖЕН';sub=sideChip(sg.side)+' уверенность <b>'+sg.conf+'%</b> · '+sg.notes.join(' · ')}
+  else{
+    const e20=te?te.e20:null;
+    sub=a.bias==='long'?'Ждём откат к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b>.':a.bias==='short'?'Ждём отскок к EMA20 ≈ <b class="mono">'+fmtPx(e20)+'</b>.':'Таймфреймы расходятся, направления нет.';
+  }
+  const s=S.set,riskUsd=s.balance*s.riskPct/100;
+  let riskBlock='';
+  if(sg){
+    const risk=Math.abs(sg.entry-sg.stop),size=risk?riskUsd/risk:0;
+    riskBlock='<div class="lv"><div>Вход<b>'+fmtPx(sg.entry)+'</b></div><div>Стоп<b class="dn">'+fmtPx(sg.stop)+'</b></div><div>Цель ('+sg.rr+'R)<b class="up">'+fmtPx(sg.target)+'</b></div><div>Размер при риске '+riskUsd.toFixed(2)+' $<b>'+(size>=1?size.toFixed(3):size.toPrecision(3))+' '+sym+'</b></div></div>';
+  }
+  $('#dBody').innerHTML='<div class="verdict '+cls+'"><div><div class="big">'+big+'</div><div style="font-size:13px;margin-top:3px">'+sub+'</div></div></div>'
+   +'<ul class="chk">'+items.join('')+'</ul>'+riskBlock
+   +'<p class="note">TradFi-анализ — тот же технический алгоритм (тренд по EMA20/50, RSI, объём, пробои/откаты), что и для крипты, посчитанный на данных Yahoo Finance. Это не биржевое исполнение: ордер на эти инструменты через приложение не ставится, сделку берёте в своём брокере/терминале. В позиции и журнал этого приложения TradFi-сделки пока не добавляются.</p>';
+  $('#dTabs').style.display='none';
+}
+
 /* ============ левая и правая колонки ============ */
 function tfDots(a){
   return '<span class="tfd">'+ANALYSIS_TF.map(tf=>{const s=a.tf[tf]?a.tf[tf].score:0;return '<i class="'+(s>=2?'l':s>0?'h':s<=-2?'s':s<0?'k':'')+'" title="'+tf+'"></i>'}).join('')+'</span>';
@@ -1455,6 +1632,23 @@ $('#dlgForm').onsubmit=e=>{
   for(const k in cache)delete cache[k];S.an={};boot();
 };
 $('#scanSearch').addEventListener('input',e=>{S.scanFilter=e.target.value;renderScan()});
+$('#marketSeg').onclick=e=>{
+  const b=e.target.closest('button');if(!b)return;
+  $$('#marketSeg button').forEach(x=>x.classList.toggle('on',x===b));
+  S.market=b.dataset.mk;
+  if(S.market==='tradfi'){
+    $('#cryptoScan').style.display='none';$('#tradfiScan').style.display='';
+    renderTradfiScan();
+    refreshTradfiCtx().then(renderTradfiScan);
+    if(TRADFI_SET.has(S.sel))selectTradfi(S.sel);
+    else{const first=TRADFI_SYMS[0].sym;selectTradfi(first)}
+  }else{
+    $('#cryptoScan').style.display='';$('#tradfiScan').style.display='none';
+    $('#dTabs').style.display='';
+    S.sel=S.lastCryptoSel&&S.ctx[S.lastCryptoSel]?S.lastCryptoSel:(watch()[0]||S.sel);
+    selectCoin(S.sel,false);renderScan();
+  }
+};
 window.addEventListener('resize',()=>{if(S.tm&&S.tab==='tm'){const f=$('#fan');if(f)drawFan(f,S.tm.fan,S.T,S.tm.H,'15m')}if(S.tab==='journal'){const eq=$('#equity');if(eq)drawEquity(eq,S.journal)}});
 $('#bLogout').onclick=()=>{S.auth=null;store.set('auth',null);location.reload()};
 function applyAuthUI(){
