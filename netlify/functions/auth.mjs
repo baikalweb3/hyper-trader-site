@@ -117,7 +117,13 @@ async function handle(req) {
   }
 
   if (action === 'signup') {
-    if (!/^[a-z0-9_]{3,20}$/.test(username)) return json({ error: 'Имя: 3-20 символов, латиница/цифры/_' }, 400);
+    // Регистрация по email вместо произвольного логина: само поле
+    // по-прежнему называется username внутри (чтобы не переписывать
+    // хранилище/токены), но теперь это обязан быть email — простая,
+    // без похода на почту (без отправки писем и кода подтверждения:
+    // для этого нужен сторонний сервис отправки и его API-ключ, которого
+    // пока нет в переменных окружения сайта).
+    if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(username)) return json({ error: 'Введите настоящий email' }, 400);
     if (password.length < 6) return json({ error: 'Пароль минимум 6 символов' }, 400);
     if (ADMIN_USERNAME && username === ADMIN_USERNAME) return json({ error: 'Это имя зарезервировано' }, 400);
     const existing = await withTimeout(store.get('u:' + username, { type: 'json' }), 8000, 'проверка занятости имени');
