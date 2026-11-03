@@ -1280,9 +1280,26 @@ function drawEquity(cv,rows){
   const lastV=pts[pts.length-1];
   g.strokeStyle=lastV>=0?cU:cD;g.lineWidth=2;g.beginPath();pts.forEach((v,i)=>{i?g.lineTo(X(i),Y(v)):g.moveTo(X(i),Y(v))});g.stroke();g.lineWidth=1;
 }
+// Статистика по сигналам движка, разбитая по дням (резолва, не появления
+// сигнала) — чтобы видеть, не "утекает" ли результат в один удачный день,
+// и список каждого отдельного сигнала с тем, как именно он закрылся.
+function dayStatTable(rows){
+  if(!rows.length)return '';
+  const byDay={};
+  rows.forEach(t=>{const d=new Date(t.resolvedAt).toLocaleDateString('ru-RU');(byDay[d]=byDay[d]||[]).push(t)});
+  const days=Object.keys(byDay).sort((a,b)=>{const pa=a.split('.').reverse().join(),pb=b.split('.').reverse().join();return pb.localeCompare(pa)});
+  return '<div class="bars" style="margin-top:4px">'+days.map(d=>{
+    const rs=byDay[d],wins=rs.filter(x=>x.R>0).length,wr=wins/rs.length*100,totR=rs.reduce((a,x)=>a+x.R,0);
+    return '<div class="card" style="cursor:default"><div class="h"><b>'+d+'</b><span class="grow"></span><span class="mut" style="font-size:12px">'+rs.length+' сигн.</span></div><div class="l">доля в плюс '+wr.toFixed(0)+'% · итог <span class="mono '+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</span></div></div>';
+  }).join('')+'</div>';
+}
+function sigReason(t){return t.timeout?'истёк срок (7д)':(t.R<0?'стоп':'цель')}
+function sigListHTML(rows,n){
+  return '<div class="bars" style="margin-top:8px">'+rows.slice(0,n).map(t=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(t.side)+' '+t.coin+' <span class="mut" style="font-size:11px">· '+sigReason(t)+'</span><span class="grow"></span><span class="mono '+(t.R>=0?'up':'dn')+'">'+(t.R>=0?'+':'')+t.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(t.entry)+' → стоп '+fmtPx(t.stop)+' / цель '+fmtPx(t.target)+' · '+new Date(t.resolvedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>';
+}
 function tabJournal(){
   resolveSigTrack();
-  const resolved=S.sigTrack.filter(t=>t.resolved),pending=S.sigTrack.length-resolved.length;
+  const resolved=S.sigTrack.filter(t=>t.resolved).sort((a,b)=>b.resolvedAt-a.resolvedAt),pending=S.sigTrack.length-resolved.length;
   const jr=S.journal;
   return '<div class="mut" style="font-size:12px;margin-bottom:8px">Здесь две разные вещи. «Ваши сделки» — всё, что вы ставили «следить» на вкладке «Выход»: приложение само закрывает их в журнал, когда цена реально доходит до стопа или цели (пока эта страница открыта на устройстве), плюс то, что вы закрыли вручную. «Статистика по сигналам» — автоматическая и беспристрастная: приложение само запоминает каждый сигнал, который выдало, и само проверяет цену — независимо от того, торговали вы это или нет.</div>'
    +'<h3 style="margin:14px 0 6px;font-size:14px">Ваши сделки ('+jr.length+')</h3>'
@@ -1291,10 +1308,13 @@ function tabJournal(){
    +(jr.length?'<div class="bars" style="margin-top:8px">'+jr.slice(0,40).map(x=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(x.side)+' '+x.coin+(x.auto?' <span class="mut" style="font-size:11px">· авто: '+x.reason+'</span>':' <span class="mut" style="font-size:11px">· закрыто вручную</span>')+'<span class="grow"></span><span class="mono '+(x.R>=0?'up':'dn')+'">'+(x.R>=0?'+':'')+x.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(x.entry)+' → выход '+fmtPx(x.exit)+' · '+new Date(x.closedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>'+(jr.length?'<button class="btn sm" id="jClear" style="margin-top:8px">Очистить журнал сделок</button>':''):'')
    +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Статистика по сигналам движка ('+resolved.length+' из '+S.sigTrack.length+', '+pending+' ещё не завершились)</h3>'
    +statBlock(resolved,'','Пока нет завершившихся сигналов — статистика появится по мере работы приложения.')
-   +'<p class="note">Копится с первого открытия приложения в этом браузере на этом устройстве и НЕ сбрасывается при обновлениях кода (локально, никуда не выгружается). Сигнал считается «дошедшим до цели» или «выбитым по стопу», когда рыночная цена касается этого уровня; если ни то ни другое не случилось за 7 дней — засчитывается как закрытый по текущей цене на тот момент.</p>';
+   +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">По дням</h4>'+dayStatTable(resolved):'')
+   +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">Каждый сигнал — чем закрылся</h4>'+'<div id="sigList">'+sigListHTML(resolved,40)+'</div>'+(resolved.length>40?'<button class="btn sm" id="sigMore" style="margin-top:6px">Показать все ('+resolved.length+')</button>':''):'')
+   +'<p class="note">Копится с первого открытия приложения в этом браузере на этом устройстве и НЕ сбрасывается при обновлениях кода (локально, никуда не выгружается). Сигнал считается «дошедшим до цели» или «выбитым по стопу», когда рыночная цена касается этого уровня; если ни то ни другое не случилось за 7 дней — засчитывается как закрытый по текущей цене на тот момент (и помечен как «истёк срок»).</p>';
 }
 function bindJournal(){
   const c=$('#jClear');if(c)c.onclick=()=>{if(confirm('Удалить весь журнал ваших сделок? Статистика по сигналам не затронется.')){S.journal=[];store.set('journal',[]);renderTab()}};
+  const m=$('#sigMore');if(m)m.onclick=()=>{const resolved=S.sigTrack.filter(t=>t.resolved).sort((a,b)=>b.resolvedAt-a.resolvedAt);$('#sigList').innerHTML=sigListHTML(resolved,resolved.length);m.remove()};
   drawEquity($('#equity'),S.journal);
 }
 
