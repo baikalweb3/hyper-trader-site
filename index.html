@@ -153,17 +153,27 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 </style>
 
 <style>
-#pwGate{position:fixed;inset:0;z-index:99999;background:#0b0f14;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-family:inherit;padding:16px}
-#pwGate input{padding:12px 14px;font-size:16px;border-radius:8px;border:1px solid #2a3542;background:#141b24;color:#e8eef5;width:240px;text-align:center}
-#pwGate button{padding:12px 20px;font-size:15px;border-radius:8px;border:none;background:#3d7eff;color:#fff;cursor:pointer}
+#pwGate,#siteGate{position:fixed;inset:0;z-index:99999;background:#0b0f14;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;font-family:inherit;padding:16px}
+#pwGate input,#siteGate input{padding:12px 14px;font-size:16px;border-radius:8px;border:1px solid #2a3542;background:#141b24;color:#e8eef5;width:240px;text-align:center}
+#pwGate button,#siteGate button{padding:12px 20px;font-size:15px;border-radius:8px;border:none;background:#3d7eff;color:#fff;cursor:pointer}
 #pwGate button.ghost{background:transparent;border:1px solid #2a3542;color:#8a97a6}
-#pwGate .err{color:#ff5c5c;font-size:13px;min-height:16px;text-align:center;max-width:280px}
-#pwGate .lbl{color:#8a97a6;font-size:14px}
-#pwGate .row{display:flex;gap:8px}
+#pwGate .err,#siteGate .err{color:#ff5c5c;font-size:13px;min-height:16px;text-align:center;max-width:280px}
+#pwGate .lbl,#siteGate .lbl{color:#8a97a6;font-size:14px}
+#pwGate .row,#siteGate .row{display:flex;gap:8px}
 </style>
 </head>
 <body>
-<div id="pwGate">
+<!-- Общий пароль сайта: отдельный слой до логина/регистрации, просто чтобы
+     случайный человек со ссылкой не попал даже на экран входа. Это не замена
+     аккаунтам (ниже) и не защита от целенаправленной атаки — не хранит
+     ничего чувствительного, пароль просто сравнивается по хэшу в браузере. -->
+<div id="siteGate">
+  <div class="lbl">Hyper Trader</div>
+  <input id="sgIn" type="password" placeholder="Пароль сайта" autocomplete="off">
+  <div class="row"><button id="sgBtn" type="button">Войти</button></div>
+  <div class="err" id="sgErr"></div>
+</div>
+<div id="pwGate" style="display:none">
   <div class="lbl" id="gateTitle">Hyper Trader — вход</div>
   <input id="pwUser" type="email" placeholder="Email" autocomplete="username">
   <input id="pwIn" type="password" placeholder="Пароль" autocomplete="current-password">
@@ -172,6 +182,10 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
     <button id="pwSignup" type="button" class="ghost">Создать аккаунт</button>
   </div>
   <div class="err" id="pwErr"></div>
+  <div id="pwCodeWrap" style="display:none;text-align:center">
+    <input id="pwCode" placeholder="Код из письма" inputmode="numeric" style="margin-top:6px">
+    <div class="row" style="margin-top:6px"><button id="pwVerify" type="button">Подтвердить email</button></div>
+  </div>
 </div>
 
 <header class="top">
@@ -1734,6 +1748,41 @@ if(S.auth&&S.auth.token)window.htStart();
 </script>
 
 <script>
+// Общий пароль сайта: хэш (SHA-256) захардкожен здесь, сам пароль нигде в
+// коде не хранится в открытом виде. Пройденная проверка запоминается в
+// localStorage этого браузера, чтобы не вводить пароль каждый раз.
+(function(){
+  var SITE_HASH = '52d22b309a6243851b1b0403818cf2d0f5f0896eef56836dce1b580bf347d02e';
+  var siteGate = document.getElementById('siteGate');
+  var pwGate0 = document.getElementById('pwGate');
+  var okStored = false;
+  try { okStored = localStorage.getItem('ht_site_ok') === '1'; } catch(e) {}
+  if (okStored) { siteGate.style.display = 'none'; pwGate0.style.display = ''; return; }
+  async function sha256Hex(s){
+    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  }
+  async function tryGo(){
+    var val = document.getElementById('sgIn').value;
+    var h = await sha256Hex(val);
+    if (h === SITE_HASH) {
+      try { localStorage.setItem('ht_site_ok', '1'); } catch(e) {}
+      siteGate.style.display = 'none';
+      var alreadyAuthed = false;
+      try { var v = localStorage.getItem('ht_auth'); alreadyAuthed = !!(v && JSON.parse(v).token); } catch(e) {}
+      if (alreadyAuthed) { pwGate0.style.display = 'none'; }
+      else { pwGate0.style.display = ''; document.getElementById('pwUser').focus(); }
+    } else {
+      document.getElementById('sgErr').textContent = 'Неверный пароль';
+    }
+  }
+  document.getElementById('sgBtn').addEventListener('click', tryGo);
+  document.getElementById('sgIn').addEventListener('keydown', function(e){ if(e.key==='Enter') tryGo(); });
+  document.getElementById('sgIn').focus();
+})();
+</script>
+
+<script>
 (function(){
   var gate = document.getElementById('pwGate');
   var authStored = null;
@@ -1742,6 +1791,7 @@ if(S.auth&&S.auth.token)window.htStart();
 
   var errEl = document.getElementById('pwErr');
   var titleEl = document.getElementById('gateTitle');
+  var pendingUser = null;
   function setErr(t){ errEl.textContent = t || ''; }
 
   async function call(action){
@@ -1770,6 +1820,13 @@ if(S.auth&&S.auth.token)window.htStart();
         }
         return;
       }
+      if (j.pending) {
+        pendingUser = username;
+        setErr('Код отправлен на ' + username + ' — введите его ниже');
+        document.getElementById('pwCodeWrap').style.display = '';
+        document.getElementById('pwCode').focus();
+        return;
+      }
       try { localStorage.setItem('ht_auth', JSON.stringify({token:j.token, username:j.username, isAdmin:!!j.isAdmin})); } catch(e) {}
       gate.style.display = 'none';
       if (window.htStart) {
@@ -1788,9 +1845,29 @@ if(S.auth&&S.auth.token)window.htStart();
     }
   }
 
+  async function verifyCode(){
+    var code = document.getElementById('pwCode').value.trim();
+    if (!pendingUser || !code) { setErr('Введите код из письма'); return; }
+    setErr('Проверяю…');
+    try {
+      var r = await fetch('/.netlify/functions/auth', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({action:'verify', username: pendingUser, code: code})
+      });
+      var j; try { j = await r.json(); } catch(e) { j = {}; }
+      if (!r.ok) { setErr(j.error || 'Ошибка'); return; }
+      try { localStorage.setItem('ht_auth', JSON.stringify({token:j.token, username:j.username, isAdmin:!!j.isAdmin})); } catch(e) {}
+      gate.style.display = 'none';
+      if (window.htStart) { try { S.auth = {token:j.token, username:j.username, isAdmin:!!j.isAdmin}; } catch(e) {} window.htStart(); }
+      else location.reload();
+    } catch(e) { setErr('Не удалось связаться с сервером'); }
+  }
+
   document.getElementById('pwBtn').addEventListener('click', function(){ call('login'); });
   document.getElementById('pwSignup').addEventListener('click', function(){ call('signup'); });
   document.getElementById('pwIn').addEventListener('keydown', function(e){ if(e.key==='Enter') call('login'); });
+  document.getElementById('pwVerify').addEventListener('click', verifyCode);
+  document.getElementById('pwCode').addEventListener('keydown', function(e){ if(e.key==='Enter') verifyCode(); });
   document.getElementById('pwUser').focus();
 })();
 </script>

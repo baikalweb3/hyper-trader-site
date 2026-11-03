@@ -12,6 +12,8 @@
 import crypto from 'node:crypto';
 
 const APP_SECRET = process.env.APP_SECRET || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const MAIL_FROM = process.env.MAIL_FROM || 'Hyper Trader <onboarding@resend.dev>';
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || 'damir').trim().toLowerCase();
 // Вход для админа работает НАПРЯМУЮ по паролю из переменной окружения,
 // без обращения к Netlify Blobs вообще — чтобы Damir всегда мог зайти,
@@ -88,6 +90,25 @@ async function rlReset(store, username) {
   try { await withTimeout(store.delete('rl:' + username), 3000, 'rate-limit reset'); } catch (e) { /* не критично */ }
 }
 
+// Отправка кода подтверждения на email через Resend (https://resend.com).
+// Без домена: отправитель onboarding@resend.dev работает "из коробки" на
+// бесплатном плане, письма просто идут от имени Resend, а не твоего домена.
+async function sendCode(email, code) {
+  if (!RESEND_API_KEY) throw new Error('RESEND_API_KEY не настроен на сайте (Site settings → Environment variables) — без него подтверждение email отправить нельзя');
+  const r = await withTimeout(fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + RESEND_API_KEY },
+    body: JSON.stringify({
+      from: MAIL_FROM, to: [email], subject: 'Код подтверждения Hyper Trader',
+      html: '<p>Код подтверждения регистрации: <b style="font-size:20px">' + code + '</b></p><p>Действует 15 минут. Если вы не регистрировались — просто игнорируйте это письмо.</p>'
+    })
+  }), 8000, 'отправка письма');
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('Не удалось отправить письмо (Resend HTTP ' + r.status + '): ' + t.slice(0, 200));
+  }
+}
+
 async function handle(req) {
   if (!APP_SECRET) return json({ error: 'APP_SECRET не настроен на сайте (Site settings → Environment variables)' }, 500);
   let body;
@@ -117,22 +138,36 @@ async function handle(req) {
   }
 
   if (action === 'signup') {
-    // Регистрация по email вместо произвольного логина: само поле
-    // по-прежнему называется username внутри (чтобы не переписывать
-    // хранилище/токены), но теперь это обязан быть email — простая,
-    // без похода на почту (без отправки писем и кода подтверждения:
-    // для этого нужен сторонний сервис отправки и его API-ключ, которого
-    // пока нет в переменных окружения сайта).
+    // Регистрация по email вместо произвольного логина (поле username внутри
+    // не переименовано, чтобы не переписывать хранилище/токены, но теперь
+    // это обязан быть email) + подтверждение кодом из письма: аккаунт
+    // создаётся не сразу, а только после verify с правильным кодом.
     if (username.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(username)) return json({ error: 'Введите настоящий email' }, 400);
     if (password.length < 6) return json({ error: 'Пароль минимум 6 символов' }, 400);
     if (ADMIN_USERNAME && username === ADMIN_USERNAME) return json({ error: 'Это имя зарезервировано' }, 400);
     const existing = await withTimeout(store.get('u:' + username, { type: 'json' }), 8000, 'проверка занятости имени');
     if (existing) return json({ error: 'Такое имя уже занято' }, 400);
+    const code = String(Math.floor(100000 + Math.random() * 900000));
     const { salt, hash } = hashPw(password);
-    const user = { username, salt, hash, createdAt: Date.now(), lastLogin: Date.now(), isAdmin: false };
+    const pendingStore = await getBlobStore('hyper-trader-pending');
+    await withTimeout(pendingStore.setJSON('p:' + username, { username, salt, hash, code, expiresAt: Date.now() + 15 * 60000 }), 8000, 'запись кода подтверждения');
+    try { await sendCode(username, code); }
+    catch (e) { return json({ error: e.message }, 500); }
+    return json({ pending: true, username });
+  }
+
+  if (action === 'verify') {
+    const code = String(body.code || '').trim();
+    const pendingStore = await getBlobStore('hyper-trader-pending');
+    const pend = await withTimeout(pendingStore.get('p:' + username, { type: 'json' }), 8000, 'чтение кода подтверждения');
+    if (!pend) return json({ error: 'Код не запрошен или уже истёк срок — зарегистрируйтесь ещё раз' }, 400);
+    if (Date.now() > pend.expiresAt) { await pendingStore.delete('p:' + username); return json({ error: 'Код истёк (15 минут) — зарегистрируйтесь ещё раз' }, 400); }
+    if (code !== pend.code) return json({ error: 'Неверный код' }, 400);
+    const user = { username, salt: pend.salt, hash: pend.hash, createdAt: Date.now(), lastLogin: Date.now(), isAdmin: false };
     await withTimeout(store.setJSON('u:' + username, user), 8000, 'запись пользователя');
     const idx = (await withTimeout(store.get('index', { type: 'json' }), 8000, 'чтение индекса')) || [];
     if (!idx.includes(username)) { idx.push(username); await withTimeout(store.setJSON('index', idx), 8000, 'запись индекса'); }
+    await pendingStore.delete('p:' + username);
     const token = sign({ u: username, isAdmin: false, exp: Date.now() + 90 * 86400000 });
     return json({ token, username, isAdmin: false });
   }
