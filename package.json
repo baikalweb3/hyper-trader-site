@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^8.1.0",
+    "ethers": "^6.13.4",
+    "@msgpack/msgpack": "^3.0.0-beta2"
   }
 }

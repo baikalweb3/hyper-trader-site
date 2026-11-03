@@ -208,7 +208,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
       <div style="padding:2px 4px 6px"><span class="mut" style="font-size:12px">график TradingView — тяните мышью, крутите колесо для зума, слева своя панель рисования (Фибо и другое). Цены входа/стопа/тейка смотрите на вкладках «Вход» и «Риск» ниже.</span></div>
       <div id="tvchart" style="height:440px;border-radius:8px;overflow:hidden"></div>
     </div>
-    <nav class="tabs" id="dTabs"><button data-t="entry" class="on">Вход</button><button data-t="tm">Time Machine</button><button data-t="exit">Выход</button><button data-t="risk">Риск</button><button data-t="walls">Стакан</button><button data-t="whales">Киты</button><button data-t="tape">Сделки</button><button data-t="journal">Журнал</button><button data-t="admin" id="tAdmin" hidden>Админ</button></nav>
+    <nav class="tabs" id="dTabs"><button data-t="entry" class="on">Вход</button><button data-t="tm">Time Machine</button><button data-t="exit">Выход</button><button data-t="risk">Риск</button><button data-t="walls">Стакан</button><button data-t="whales">Киты</button><button data-t="tape">Сделки</button><button data-t="journal">Журнал</button><button data-t="auto">Авто</button><button data-t="admin" id="tAdmin" hidden>Админ</button></nav>
     <div class="pb" id="dBody"></div>
   </section>
 
@@ -731,6 +731,7 @@ function renderTab(){
   else if(S.tab==='journal')el.innerHTML=tabJournal(),bindJournal();
   else if(S.tab==='admin')el.innerHTML=tabAdmin(),bindAdmin();
   else if(S.tab==='whales')el.innerHTML=tabWhales(),bindWhales();
+  else if(S.tab==='auto'){el.innerHTML='<div class="empty">Загружаю…</div>';loadAutoState().then(()=>{if(S.tab==='auto'){el.innerHTML=tabAuto();bindAuto()}})}
   else el.innerHTML=tabRisk(),bindRisk();
 }
 function tabAdmin(){
@@ -1283,6 +1284,79 @@ function bindJournal(){
   drawEquity($('#equity'),S.journal);
 }
 
+
+/* ============ автоторговля: подключение API-кошелька, настройки, отчёты ============ */
+S.auto=S.auto||{connected:false};S.autoRows=S.autoRows||[];
+async function loadAutoState(){
+  if(!S.auth||!S.auth.token){S.auto={connected:false,noAuth:true};return}
+  try{
+    const w=await apiCall('wallet',{headers:{'Authorization':'Bearer '+S.auth.token}});
+    S.auto=Object.assign({noAuth:false},w);
+  }catch(e){S.auto={connected:false,noAuth:false,err:e.message}}
+  try{
+    const j=await apiCall('journal',{headers:{'Authorization':'Bearer '+S.auth.token}});
+    S.autoRows=(j.rows||[]).filter(r=>r.auto&&r.reason==='autotrade');
+  }catch(e){S.autoRows=[]}
+}
+function autoReportBlock(){
+  const now=Date.now(),DAY=86400000;
+  const since=ms=>S.autoRows.filter(r=>r.closedAt>=now-ms);
+  return '<div class="seg" id="autoRepSeg" style="margin:10px 0"><button data-d="1" class="on">Сутки</button><button data-d="7">Неделя</button><button data-d="30">Месяц</button><button data-d="99999">Всё время</button></div>'
+   +'<div id="autoRepBody">'+statBlock(since(DAY),'','Пока нет завершённых автосделок за этот период.')+'</div>';
+}
+function tabAuto(){
+  if(S.auto.noAuth)return '<div class="empty">Войдите или зарегистрируйтесь (по email, вверху), чтобы подключить автоторговлю — ключ привязывается к вашему аккаунту.</div>';
+  const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15},a.settings||{});
+  let html='<div class="mut" style="font-size:12px;margin-bottom:10px">Бот торгует сам, 24/7, на сервере — не зависит от того, открыта ли эта страница. Вставляется только <b>API-кошелёк</b> (ограниченный ключ без права вывода, создаётся в настройках Hyperliquid), а не ваш основной приватный ключ. Прежде чем включать на реальные деньги — обязательно проверьте на testnet на маленьком размере.</div>';
+  if(!a.connected){
+    html+='<div class="form"><label>Ключ API-кошелька (64 hex, из Hyperliquid → Settings → API)<input id="awKey" type="password" placeholder="0x…" autocomplete="off"></label>'
+     +'<label>Адрес основного кошелька (0x…40 символов)<input id="awAddr" placeholder="0x…" autocomplete="off"></label>'
+     +'<label><input type="checkbox" id="awMain" checked style="width:auto;margin-right:6px">Mainnet (реальные деньги). Снимите галочку для testnet.</label></div>'
+     +'<button class="btn" id="awConnect">Подключить кошелёк</button><div id="awErr" class="mut dn" style="margin-top:6px;font-size:12px"></div>';
+  }else{
+    html+='<div class="lv"><div>Кошелёк<b class="mono" style="font-size:12px">'+a.mainAddress.slice(0,6)+'…'+a.mainAddress.slice(-4)+'</b></div><div>Сеть<b class="'+(a.isMainnet?'dn':'')+'">'+(a.isMainnet?'Mainnet':'Testnet')+'</b></div></div>'
+     +'<label class="row" style="display:flex;align-items:center;gap:8px;margin:10px 0"><input type="checkbox" id="awToggle" '+(a.autoTrade?'checked':'')+' style="width:auto"><b>Автоторговля '+(a.autoTrade?'ВКЛЮЧЕНА':'выключена')+'</b></label>'
+     +'<div class="form"><label>Риск на сделку, %<input id="asRisk" inputmode="decimal" value="'+s.riskPct+'"></label>'
+     +'<label>Горизонт<select id="asHz"><option value="short"'+(s.horizon==='short'?' selected':'')+'>Краткосрочно 1:2</option><option value="intraday"'+(s.horizon==='intraday'?' selected':'')+'>Интрадей 1:3</option><option value="mid"'+(s.horizon==='mid'?' selected':'')+'>Среднесрочно 1:3</option></select></label>'
+     +'<label>Макс. одновременных позиций<input id="asMax" inputmode="numeric" value="'+s.maxPositions+'"></label>'
+     +'<label>Мин. уверенность сигнала, %<input id="asConf" inputmode="numeric" value="'+s.minConf+'"></label>'
+     +'<label>Сколько монет сканировать (топ по объёму)<input id="asWatch" inputmode="numeric" value="'+s.watchN+'"></label></div>'
+     +'<button class="btn sm" id="asSave">Сохранить настройки</button> <button class="btn sm" id="awDisconnect" style="margin-left:6px">Отключить кошелёк</button>'
+     +'<p class="note">Размер позиции считается от риска % на сделку от реального баланса счёта на Hyperliquid (не от введённого вручную числа). Проверка сигналов и открытых позиций — раз в 15 минут. Автоматического аварийного отключения по дневному лимиту потерь нет (по вашему выбору) — следить за лимитом нужно самостоятельно.</p>'
+     +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Отчёты по автоторговле</h3>'+autoReportBlock();
+  }
+  return html;
+}
+function bindAuto(){
+  const err=m=>{const e=$('#awErr');if(e){e.textContent=m;e.classList.toggle('dn',!m)}};
+  const c=$('#awConnect');if(c)c.onclick=async()=>{
+    const apiWalletKey=$('#awKey').value.trim(),mainAddress=$('#awAddr').value.trim(),isMainnet=$('#awMain').checked;
+    if(!apiWalletKey||!mainAddress){err('Заполните оба поля');return}
+    c.disabled=true;
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'connect',apiWalletKey,mainAddress,isMainnet})});await loadAutoState();renderTab()}
+    catch(e){err(e.message)}finally{c.disabled=false}
+  };
+  const t=$('#awToggle');if(t)t.onchange=async()=>{
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'toggle',autoTrade:t.checked})});await loadAutoState();renderTab()}
+    catch(e){alert('Не удалось переключить: '+e.message)}
+  };
+  const sv=$('#asSave');if(sv)sv.onclick=async()=>{
+    const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value};
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'settings',settings})});await loadAutoState();renderTab()}
+    catch(e){alert('Не удалось сохранить: '+e.message)}
+  };
+  const d=$('#awDisconnect');if(d)d.onclick=async()=>{
+    if(!confirm('Отключить API-кошелёк? Автоторговля остановится.'))return;
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'disconnect'})});await loadAutoState();renderTab()}
+    catch(e){alert('Ошибка: '+e.message)}
+  };
+  const seg=$('#autoRepSeg');if(seg)seg.onclick=e=>{
+    const b=e.target.closest('button');if(!b)return;
+    $$('#autoRepSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    const ms=+b.dataset.d*86400000,rows=S.autoRows.filter(r=>r.closedAt>=Date.now()-ms);
+    $('#autoRepBody').innerHTML=statBlock(rows,'','Пока нет завершённых автосделок за этот период.');
+  };
+}
 
 /* ============ лента сделок (тики) ============ */
 let ws=null,wsCoin=null,tapeT=0;
