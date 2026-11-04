@@ -1319,6 +1319,20 @@ function dayStatTable(rows){
     return '<div class="card" style="cursor:default"><div class="h"><b>'+d+'</b><span class="grow"></span><span class="mut" style="font-size:12px">'+rs.length+' сигн.</span></div><div class="l">доля в плюс '+wr.toFixed(0)+'% · итог <span class="mono '+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</span></div></div>';
   }).join('')+'</div>';
 }
+const HZ_LABEL={short:'Краткосрочно',intraday:'Интрадей',mid:'Среднесрочно'};
+// Статистика по сигналам, разбитая по горизонту (кратко/интрадей/средне) —
+// чтобы видно было, какой горизонт реально даёт лучший результат, а не
+// только общую цифру по всем вперемешку.
+function horizonStatTable(rows){
+  if(!rows.length)return '';
+  const byHz={};
+  rows.forEach(t=>{const k=t.horizon||'short';(byHz[k]=byHz[k]||[]).push(t)});
+  const keys=Object.keys(byHz).sort((a,b)=>byHz[b].reduce((s,x)=>s+x.R,0)-byHz[a].reduce((s,x)=>s+x.R,0));
+  return '<div class="bars" style="margin-top:4px">'+keys.map(k=>{
+    const rs=byHz[k],wins=rs.filter(x=>x.R>0).length,wr=wins/rs.length*100,totR=rs.reduce((a,x)=>a+x.R,0),avgR=totR/rs.length;
+    return '<div class="card" style="cursor:default"><div class="h"><b>'+(HZ_LABEL[k]||k)+'</b><span class="grow"></span><span class="mut" style="font-size:12px">'+rs.length+' сигн.</span></div><div class="l">доля в плюс '+wr.toFixed(0)+'% · средний '+(avgR>=0?'+':'')+avgR.toFixed(2)+' R · итог <span class="mono '+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</span></div></div>';
+  }).join('')+'</div>';
+}
 function sigReason(t){return t.timeout?'истёк срок (7д)':(t.R<0?'стоп':'цель')}
 function sigListHTML(rows,n){
   return '<div class="bars" style="margin-top:8px">'+rows.slice(0,n).map(t=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(t.side)+' '+t.coin+' <span class="mut" style="font-size:11px">· '+sigReason(t)+'</span><span class="grow"></span><span class="mono '+(t.R>=0?'up':'dn')+'">'+(t.R>=0?'+':'')+t.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(t.entry)+' → стоп '+fmtPx(t.stop)+' / цель '+fmtPx(t.target)+' · '+new Date(t.resolvedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>';
@@ -1334,6 +1348,7 @@ function tabJournal(){
    +(jr.length?'<div class="bars" style="margin-top:8px">'+jr.slice(0,40).map(x=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(x.side)+' '+x.coin+(x.auto?' <span class="mut" style="font-size:11px">· авто: '+x.reason+'</span>':' <span class="mut" style="font-size:11px">· закрыто вручную</span>')+'<span class="grow"></span><span class="mono '+(x.R>=0?'up':'dn')+'">'+(x.R>=0?'+':'')+x.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(x.entry)+' → выход '+fmtPx(x.exit)+' · '+new Date(x.closedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>'+(jr.length?'<button class="btn sm" id="jClear" style="margin-top:8px">Очистить журнал сделок</button>':''):'')
    +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Статистика по сигналам движка ('+resolved.length+' из '+S.sigTrack.length+', '+pending+' ещё не завершились)</h3>'
    +statBlock(resolved,'','Пока нет завершившихся сигналов — статистика появится по мере работы приложения.')
+   +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">По горизонтам — где реально больше плюса</h4>'+horizonStatTable(resolved):'')
    +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">По дням</h4>'+dayStatTable(resolved):'')
    +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">Каждый сигнал — чем закрылся</h4>'+'<div id="sigList">'+sigListHTML(resolved,40)+'</div>'+(resolved.length>40?'<button class="btn sm" id="sigMore" style="margin-top:6px">Показать все ('+resolved.length+')</button>':''):'')
    +'<p class="note">Копится с первого открытия приложения в этом браузере на этом устройстве и НЕ сбрасывается при обновлениях кода (локально, никуда не выгружается). Сигнал считается «дошедшим до цели» или «выбитым по стопу», когда рыночная цена касается этого уровня; если ни то ни другое не случилось за 7 дней — засчитывается как закрытый по текущей цене на тот момент (и помечен как «истёк срок»).</p>';
