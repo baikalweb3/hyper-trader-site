@@ -165,8 +165,9 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <body>
 <!-- Общий пароль сайта: отдельный слой до логина/регистрации, просто чтобы
      случайный человек со ссылкой не попал даже на экран входа. Это не замена
-     аккаунтам (ниже) и не защита от целенаправленной атаки — не хранит
-     ничего чувствительного, пароль просто сравнивается по хэшу в браузере. -->
+     аккаунтам (ниже). Сам пароль проверяется на сервере (netlify/functions/
+     gate.mjs) — в коде страницы его хэша больше нет, так что его нельзя
+     подобрать офлайн просто открыв "исходный код страницы". -->
 <div id="siteGate">
   <div class="lbl">Hyper Trader</div>
   <input id="sgIn" type="password" placeholder="Пароль сайта" autocomplete="off">
@@ -1797,29 +1798,36 @@ if(S.auth&&S.auth.token)window.htStart();
 // коде не хранится в открытом виде. Пройденная проверка запоминается в
 // localStorage этого браузера, чтобы не вводить пароль каждый раз.
 (function(){
-  var SITE_HASH = '52d22b309a6243851b1b0403818cf2d0f5f0896eef56836dce1b580bf347d02e';
   var siteGate = document.getElementById('siteGate');
   var pwGate0 = document.getElementById('pwGate');
-  var okStored = false;
-  try { okStored = localStorage.getItem('ht_site_ok') === '1'; } catch(e) {}
-  if (okStored) { siteGate.style.display = 'none'; pwGate0.style.display = ''; return; }
-  async function sha256Hex(s){
-    var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-    return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-  }
+  var tokStored = null;
+  try { tokStored = localStorage.getItem('ht_site_tok'); } catch(e) {}
+  // Старый формат localStorage ('ht_site_ok'='1') от прежней клиентской
+  // проверки больше не признаётся — токена там нет, значит пароль надо
+  // ввести ещё раз один раз, уже с проверкой на сервере.
+  if (tokStored) { siteGate.style.display = 'none'; pwGate0.style.display = ''; return; }
+  var busy = false;
   async function tryGo(){
+    if (busy) return;
     var val = document.getElementById('sgIn').value;
-    var h = await sha256Hex(val);
-    if (h === SITE_HASH) {
-      try { localStorage.setItem('ht_site_ok', '1'); } catch(e) {}
-      siteGate.style.display = 'none';
-      var alreadyAuthed = false;
-      try { var v = localStorage.getItem('ht_auth'); alreadyAuthed = !!(v && JSON.parse(v).token); } catch(e) {}
-      if (alreadyAuthed) { pwGate0.style.display = 'none'; }
-      else { pwGate0.style.display = ''; document.getElementById('pwUser').focus(); }
-    } else {
-      document.getElementById('sgErr').textContent = 'Неверный пароль';
-    }
+    var btn = document.getElementById('sgBtn');
+    busy = true; btn.disabled = true;
+    try {
+      var r = await fetch('/.netlify/functions/gate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: val }) });
+      var data = await r.json().catch(function(){ return {}; });
+      if (r.ok && data.token) {
+        try { localStorage.setItem('ht_site_tok', data.token); } catch(e) {}
+        siteGate.style.display = 'none';
+        var alreadyAuthed = false;
+        try { var v = localStorage.getItem('ht_auth'); alreadyAuthed = !!(v && JSON.parse(v).token); } catch(e) {}
+        if (alreadyAuthed) { pwGate0.style.display = 'none'; }
+        else { pwGate0.style.display = ''; document.getElementById('pwUser').focus(); }
+      } else {
+        document.getElementById('sgErr').textContent = data.error || 'Неверный пароль';
+      }
+    } catch(e) {
+      document.getElementById('sgErr').textContent = 'Сбой сети, попробуйте ещё раз';
+    } finally { busy = false; btn.disabled = false; }
   }
   document.getElementById('sgBtn').addEventListener('click', tryGo);
   document.getElementById('sgIn').addEventListener('keydown', function(e){ if(e.key==='Enter') tryGo(); });
