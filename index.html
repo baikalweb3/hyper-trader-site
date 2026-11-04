@@ -749,7 +749,7 @@ function renderTab(){
   else el.innerHTML=tabRisk(),bindRisk();
 }
 function tabAdmin(){
-  return '<div class="mut" style="font-size:12px;margin-bottom:8px">Все, кто зарегистрировался на сайте: когда заходили, что у них в журнале сделок, и (если подключили) статус автоторговли и сколько она им реально заработала. Сам ключ API-кошелька пользователя здесь никогда не показывается — это чужой торговый доступ, его видеть не нужно, достаточно результата.</div><div id="adminOut"><p class="note">Загружаю…</p></div>';
+  return '<div class="mut" style="font-size:12px;margin-bottom:8px">Все, кто зарегистрировался на сайте: когда заходили, что у них в журнале сделок, и (если подключили) статус автоторговли, сколько она им реально заработала и их API-ключ (скрыт по умолчанию, раскрывается кнопкой «показать»).</div><div id="adminOut"><p class="note">Загружаю…</p></div>';
 }
 async function bindAdmin(){
   const box=$('#adminOut');
