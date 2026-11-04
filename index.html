@@ -763,12 +763,23 @@ async function bindAdmin(){
         '<div class="lv" style="margin-top:6px"><div>Кошелёк<b class="mono" style="font-size:11px">'+esc(w.mainAddress.slice(0,6)+'…'+w.mainAddress.slice(-4))+'</b></div><div>Сеть<b class="'+(w.isMainnet?'dn':'')+'">'+(w.isMainnet?'Mainnet':'Testnet')+'</b></div><div>Автоторговля<b class="'+(w.autoTrade?'up':'')+'">'+(w.autoTrade?'включена':'выключена')+'</b></div>'
          +'<div>Риск/сделку<b>'+(w.settings?w.settings.riskPct+'%':'—')+'</b></div></div>'
          +'<div class="lv" style="margin-top:4px"><div>Автосделок закрыто<b>'+at.trades+'</b></div><div>Заработано автоторговлей<b class="'+(at.pnlUsd>=0?'up':'dn')+'">'+(at.pnlUsd>=0?'+':'')+at.pnlUsd.toFixed(2)+' $</b></div></div>'
+         +(w.apiWalletKey?'<div style="margin-top:6px;display:flex;gap:6px;align-items:center"><span class="mut" style="font-size:11px">API-ключ:</span><span class="mono akKey" data-full="'+esc(w.apiWalletKey)+'" style="font-size:11px;word-break:break-all">••••••••••••••••••••••••</span><button class="btn sm akToggle" type="button">показать</button><button class="btn sm akCopy" type="button">копировать</button></div>':'')
       ):'<div class="mut" style="font-size:12px;margin-top:4px">Кошелёк не подключен</div>';
       return '<div class="card" style="cursor:default;margin-bottom:8px"><div class="h"><b>'+esc(u.username)+'</b>'+(u.isAdmin?' <span class="mut" style="font-size:11px">· админ</span>':'')+'<span class="grow"></span><span class="mut" style="font-size:12px">заходил: '+new Date(u.lastLogin).toLocaleString('ru-RU')+'</span></div>'
        +'<div class="lv"><div>Регистрация<b style="font-size:12px">'+new Date(u.createdAt).toLocaleDateString('ru-RU')+'</b></div><div>Сделок в журнале<b>'+u.trades+'</b></div><div>Доля в плюс<b class="'+(u.winPct>=50?'up':'dn')+'">'+(u.winPct==null?'—':u.winPct+'%')+'</b></div><div>Суммарно R<b class="'+(u.totalR>=0?'up':'dn')+'">'+(u.totalR>=0?'+':'')+u.totalR+'</b></div></div>'
        +walletHTML
        +(last5?'<div style="margin-top:6px">'+last5+'</div>':'')+'</div>';
     }).join('');
+    $$('.akToggle',box).forEach(b=>b.onclick=()=>{
+      const s=b.previousElementSibling;
+      const shown=s.textContent===s.dataset.full;
+      s.textContent=shown?'••••••••••••••••••••••••':s.dataset.full;
+      b.textContent=shown?'показать':'скрыть';
+    });
+    $$('.akCopy',box).forEach(b=>b.onclick=()=>{
+      const s=b.previousElementSibling.previousElementSibling;
+      navigator.clipboard.writeText(s.dataset.full).then(()=>{b.textContent='скопировано';setTimeout(()=>b.textContent='копировать',1200)});
+    });
   }catch(e){box.innerHTML='<p class="note dn">Не удалось загрузить: '+esc(e.message||e)+'</p>'}
 }
 /* ============ Киты: слежка за публичными позициями кошельков Hyperliquid ============

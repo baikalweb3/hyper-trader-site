@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { decryptKey } from './wallet.mjs';
 
 async function getBlobStore(name) {
   let mod;
@@ -56,12 +57,14 @@ async function handle(req) {
     // заработка (pnlUsd), не путая его с виртуальными/ручными записями журнала.
     const atRows = rows.filter(r => r.auto && (r.reason === 'autotrade' || r.reason === 'autotrade-timeout'));
     const atPnlUsd = Math.round(atRows.reduce((a, r) => a + (r.pnlUsd || 0), 0) * 100) / 100;
-    // Из кошелька берём ТОЛЬКО публичные/безопасные поля — сам ключ (enc/iv/tag)
-    // сюда никогда не попадает, даже тебе: он не нужен, чтобы видеть, сколько
-    // пользователь заработал, а раскрывать чужие торговые ключи — лишний риск
-    // (скомпрометированная админка сразу отдаёт доступ ко всем счетам сразу).
+    // По явному решению владельца сайта — админ видит расшифрованный
+    // API-ключ кошелька каждого пользователя (а не только мета-данные).
+    // Это ответственность владельца: отсюда дальше ключ ничем не защищён
+    // от того, у кого есть доступ в этот аккаунт/токен админа.
     const w = await wallets.get('w:' + username, { type: 'json' });
-    const wallet = w ? { mainAddress: w.mainAddress, isMainnet: w.isMainnet !== false, autoTrade: !!w.autoTrade, settings: w.settings || null } : null;
+    let apiWalletKey = null;
+    if (w) { try { apiWalletKey = decryptKey(w); } catch (e) { apiWalletKey = null; } }
+    const wallet = w ? { mainAddress: w.mainAddress, isMainnet: w.isMainnet !== false, autoTrade: !!w.autoTrade, settings: w.settings || null, apiWalletKey } : null;
     out.push({
       username, createdAt: u.createdAt, lastLogin: u.lastLogin, isAdmin: !!u.isAdmin,
       trades: rows.length, winPct: rows.length ? Math.round(wins / rows.length * 100) : null,
