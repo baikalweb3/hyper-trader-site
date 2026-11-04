@@ -97,7 +97,11 @@ export default async () => {
           const risk = Math.abs(p.entry - p.stop);
           const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1;
           const reason = timedOut ? 'autotrade-timeout' : 'autotrade';
-          await journalWrite(username, { id: 'at' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R, closedAt: Date.now(), auto: true, reason });
+          // Реальный $-результат сделки (не только R) — нужен, чтобы считать
+          // комиссию/процент с заработка пользователя в админке, не оценивая
+          // его на глаз через риск%, который мог меняться со временем.
+          const pnlUsd = (long ? mark - p.entry : p.entry - mark) * parseFloat(p.size);
+          await journalWrite(username, { id: 'at' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R, pnlUsd, closedAt: Date.now(), auto: true, reason });
           results.push(username + ': закрыт ' + p.coin + ' ' + (hitTarget ? 'по цели' : timedOut ? 'по тайм-ауту (5 дней)' : 'по стопу'));
         } catch (e) { stillOpen.push(p); results.push(username + ': ОШИБКА закрытия ' + p.coin + ': ' + e.message); }
       } else stillOpen.push(p);

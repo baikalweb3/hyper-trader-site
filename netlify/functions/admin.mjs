@@ -36,10 +36,11 @@ async function handle(req) {
   const payload = verify(tokenFrom(req));
   if (!payload || !payload.isAdmin) return json({ error: 'только для админа' }, 403);
 
-  let users, journal;
+  let users, journal, wallets;
   try {
     users = await getBlobStore('hyper-trader-users');
     journal = await getBlobStore('hyper-trader-journal');
+    wallets = await getBlobStore('hyper-trader-wallets');
   } catch (e) {
     return json({ error: (e && e.message ? e.message : String(e)) }, 500);
   }
@@ -51,10 +52,21 @@ async function handle(req) {
     const rows = (await journal.get('j:' + username, { type: 'json' })) || [];
     const wins = rows.filter(r => r.R > 0).length;
     const totR = rows.reduce((a, r) => a + (r.R || 0), 0);
+    // Автоторговля отдельно — чтобы можно было посчитать комиссию с реального
+    // заработка (pnlUsd), не путая его с виртуальными/ручными записями журнала.
+    const atRows = rows.filter(r => r.auto && (r.reason === 'autotrade' || r.reason === 'autotrade-timeout'));
+    const atPnlUsd = Math.round(atRows.reduce((a, r) => a + (r.pnlUsd || 0), 0) * 100) / 100;
+    // Из кошелька берём ТОЛЬКО публичные/безопасные поля — сам ключ (enc/iv/tag)
+    // сюда никогда не попадает, даже тебе: он не нужен, чтобы видеть, сколько
+    // пользователь заработал, а раскрывать чужие торговые ключи — лишний риск
+    // (скомпрометированная админка сразу отдаёт доступ ко всем счетам сразу).
+    const w = await wallets.get('w:' + username, { type: 'json' });
+    const wallet = w ? { mainAddress: w.mainAddress, isMainnet: w.isMainnet !== false, autoTrade: !!w.autoTrade, settings: w.settings || null } : null;
     out.push({
       username, createdAt: u.createdAt, lastLogin: u.lastLogin, isAdmin: !!u.isAdmin,
       trades: rows.length, winPct: rows.length ? Math.round(wins / rows.length * 100) : null,
-      totalR: Math.round(totR * 100) / 100, lastTrades: rows.slice(0, 5)
+      totalR: Math.round(totR * 100) / 100, lastTrades: rows.slice(0, 5),
+      wallet, autotrade: { trades: atRows.length, pnlUsd: atPnlUsd }
     });
   }
   out.sort((a, b) => b.lastLogin - a.lastLogin);
