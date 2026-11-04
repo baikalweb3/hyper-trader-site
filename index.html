@@ -261,6 +261,13 @@ const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelect
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const store={get(k,d){try{const v=localStorage.getItem('ht_'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('ht_'+k,JSON.stringify(v))}catch(e){}}};
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let toastT=null;
+function toast(msg,kind){
+  let t=$('#htToast');
+  if(!t){t=document.createElement('div');t.id='htToast';t.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,.3);transition:opacity .2s;max-width:90vw;text-align:center';document.body.appendChild(t)}
+  t.style.background=kind==='err'?'#5c1f1f':'#1f5c33';t.style.color='#fff';t.textContent=msg;t.style.opacity='1';
+  clearTimeout(toastT);toastT=setTimeout(()=>{t.style.opacity='0'},kind==='err'?4500:2500);
+}
 const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 function fmtPx(p){if(p==null||isNaN(p))return '—';const a=Math.abs(p);const d=a>=1000?2:a>=100?2:a>=10?3:a>=1?4:a>=0.1?5:6;return p.toLocaleString('ru-RU',{minimumFractionDigits:d>2?d:2,maximumFractionDigits:d})}
 const fmtPct=(x,d=2)=>(x>=0?'+':'')+x.toFixed(d)+'%';
@@ -1385,22 +1392,22 @@ function bindAuto(){
     const apiWalletKey=$('#awKey').value.trim(),mainAddress=$('#awAddr').value.trim(),isMainnet=$('#awMain').checked;
     if(!apiWalletKey||!mainAddress){err('Заполните оба поля');return}
     c.disabled=true;
-    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'connect',apiWalletKey,mainAddress,isMainnet})});await loadAutoState();renderTab()}
-    catch(e){err(e.message)}finally{c.disabled=false}
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'connect',apiWalletKey,mainAddress,isMainnet})});await loadAutoState();renderTab();toast('Кошелёк подключён ('+(isMainnet?'Mainnet':'Testnet')+')')}
+    catch(e){err(e.message);toast('Ошибка подключения: '+e.message,'err')}finally{c.disabled=false}
   };
   const t=$('#awToggle');if(t)t.onchange=async()=>{
-    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'toggle',autoTrade:t.checked})});await loadAutoState();renderTab()}
-    catch(e){alert('Не удалось переключить: '+e.message)}
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'toggle',autoTrade:t.checked})});await loadAutoState();renderTab();toast(t.checked?'Автоторговля включена':'Автоторговля выключена')}
+    catch(e){alert('Не удалось переключить: '+e.message);toast('Не удалось переключить: '+e.message,'err')}
   };
   const sv=$('#asSave');if(sv)sv.onclick=async()=>{
     const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value};
-    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'settings',settings})});await loadAutoState();renderTab()}
-    catch(e){alert('Не удалось сохранить: '+e.message)}
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'settings',settings})});await loadAutoState();renderTab();toast('Настройки сохранены')}
+    catch(e){alert('Не удалось сохранить: '+e.message);toast('Не удалось сохранить: '+e.message,'err')}
   };
   const d=$('#awDisconnect');if(d)d.onclick=async()=>{
     if(!confirm('Отключить API-кошелёк? Автоторговля остановится.'))return;
-    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'disconnect'})});await loadAutoState();renderTab()}
-    catch(e){alert('Ошибка: '+e.message)}
+    try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'disconnect'})});await loadAutoState();renderTab();toast('Кошелёк отключён')}
+    catch(e){alert('Ошибка: '+e.message);toast('Ошибка: '+e.message,'err')}
   };
   const seg=$('#autoRepSeg');if(seg)seg.onclick=e=>{
     const b=e.target.closest('button');if(!b)return;
