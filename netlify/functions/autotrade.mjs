@@ -22,6 +22,7 @@ const API = 'https://api.hyperliquid.xyz/info';
 const DEFAULT_MIN_CONF = 55;
 const DEFAULT_MAX_POS = 3;
 const SLIP = 0.003; // допустимое проскальзывание на IOC-ордере, защита от аномальной цены
+const MAX_HOLD_MS = 5 * 86400000; // принудительно закрыть реальную позицию, если за 5 дней цена не дошла ни до стопа, ни до цели (позиция не должна висеть бесконечно)
 
 async function post(body, base) {
   const r = await fetch((base || API), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -87,14 +88,17 @@ export default async () => {
       const long = p.side === 'long';
       const hitStop = long ? mark <= p.stop : mark >= p.stop;
       const hitTarget = long ? mark >= p.target : mark <= p.target;
-      if (hitStop || hitTarget) {
+      const timedOut = !hitStop && !hitTarget && p.openedAt && (Date.now() - p.openedAt > MAX_HOLD_MS);
+      if (hitStop || hitTarget || timedOut) {
         try {
           const assetId = assetIds[p.coin];
           const closePx = long ? (mark * (1 - SLIP)).toPrecision(6) : (mark * (1 + SLIP)).toPrecision(6);
           await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: !long, sizeStr: p.size, limitPxStr: closePx, reduceOnly: true });
-          const R = hitTarget ? p.rr : -1;
-          await journalWrite(username, { id: 'at' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R, closedAt: Date.now(), auto: true, reason: 'autotrade' });
-          results.push(username + ': закрыт ' + p.coin + ' ' + (hitTarget ? 'по цели' : 'по стопу'));
+          const risk = Math.abs(p.entry - p.stop);
+          const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1;
+          const reason = timedOut ? 'autotrade-timeout' : 'autotrade';
+          await journalWrite(username, { id: 'at' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R, closedAt: Date.now(), auto: true, reason });
+          results.push(username + ': закрыт ' + p.coin + ' ' + (hitTarget ? 'по цели' : timedOut ? 'по тайм-ауту (5 дней)' : 'по стопу'));
         } catch (e) { stillOpen.push(p); results.push(username + ': ОШИБКА закрытия ' + p.coin + ': ' + e.message); }
       } else stillOpen.push(p);
     }

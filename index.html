@@ -1329,7 +1329,7 @@ async function loadAutoState(){
   }catch(e){S.auto={connected:false,noAuth:false,err:e.message}}
   try{
     const j=await apiCall('journal',{headers:{'Authorization':'Bearer '+S.auth.token}});
-    S.autoRows=(j.rows||[]).filter(r=>r.auto&&r.reason==='autotrade');
+    S.autoRows=(j.rows||[]).filter(r=>r.auto&&(r.reason==='autotrade'||r.reason==='autotrade-timeout'));
   }catch(e){S.autoRows=[]}
 }
 function autoReportBlock(){
