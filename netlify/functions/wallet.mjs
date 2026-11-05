@@ -46,6 +46,23 @@ export function decryptKey(rec) {
 const EVM_ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
 const EVM_KEY_RE = /^(0x)?[a-fA-F0-9]{64}$/;
 
+// Реальный баланс счёта на Hyperliquid (то же, от чего autotrade.mjs считает
+// размер позиции по риску %) — показываем его на вкладке "Авто", чтобы было
+// видно, со сколькими деньгами бот реально работает, без захода на сам
+// Hyperliquid.
+async function fetchAccountValue(mainAddress, isMainnet) {
+  const base = isMainnet ? 'https://api.hyperliquid.xyz/info' : 'https://api.hyperliquid-testnet.xyz/info';
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'clearinghouseState', user: mainAddress }), signal: ctrl.signal });
+    if (!r.ok) return null;
+    const st = await r.json();
+    return st && st.marginSummary ? { accountValue: +st.marginSummary.accountValue, withdrawable: st.withdrawable != null ? +st.withdrawable : null } : null;
+  } catch (e) { return null; }
+  finally { clearTimeout(t); }
+}
+
 async function handle(req) {
   const payload = verify(tokenFrom(req));
   if (!payload) return json({ error: 'не авторизован' }, 401);
@@ -65,7 +82,8 @@ async function handle(req) {
       const posStore = await getBlobStore('hyper-trader-autopos');
       positions = (await posStore.get('p:' + payload.u, { type: 'json' })) || [];
     } catch (e) { /* не критично — просто не покажем позиции */ }
-    return json({ connected: true, mainAddress: rec.mainAddress, autoTrade: !!rec.autoTrade, isMainnet: rec.isMainnet !== false, settings: rec.settings || {}, updatedAt: rec.updatedAt, positions });
+    const balance = await fetchAccountValue(rec.mainAddress, rec.isMainnet !== false);
+    return json({ connected: true, mainAddress: rec.mainAddress, autoTrade: !!rec.autoTrade, isMainnet: rec.isMainnet !== false, settings: rec.settings || {}, updatedAt: rec.updatedAt, positions, balance });
   }
 
   if (req.method === 'POST') {

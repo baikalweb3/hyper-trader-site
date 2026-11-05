@@ -1404,7 +1404,8 @@ function tabAuto(){
      +'<label><input type="checkbox" id="awMain" checked style="width:auto;margin-right:6px">Mainnet (реальные деньги). Снимите галочку для testnet.</label></div>'
      +'<button class="btn" id="awConnect">Подключить кошелёк</button><div id="awErr" class="mut dn" style="margin-top:6px;font-size:12px"></div>';
   }else{
-    html+='<div class="lv"><div>Кошелёк<b class="mono" style="font-size:12px">'+a.mainAddress.slice(0,6)+'…'+a.mainAddress.slice(-4)+'</b></div><div>Сеть<b class="'+(a.isMainnet?'dn':'')+'">'+(a.isMainnet?'Mainnet':'Testnet')+'</b></div></div>'
+    html+='<div class="lv"><div>Кошелёк<b class="mono" style="font-size:12px">'+a.mainAddress.slice(0,6)+'…'+a.mainAddress.slice(-4)+'</b></div><div>Сеть<b class="'+(a.isMainnet?'dn':'')+'">'+(a.isMainnet?'Mainnet':'Testnet')+'</b></div>'
+     +(a.balance&&a.balance.accountValue!=null?'<div>Баланс счёта<b class="mono">$'+a.balance.accountValue.toLocaleString('ru-RU',{maximumFractionDigits:2})+'</b></div>':'<div>Баланс счёта<b class="mut">не удалось получить</b></div>')+'</div>'
      +'<label class="row" style="display:flex;align-items:center;gap:8px;margin:10px 0"><input type="checkbox" id="awToggle" '+(a.autoTrade?'checked':'')+' style="width:auto"><b>Автоторговля '+(a.autoTrade?'ВКЛЮЧЕНА':'выключена')+'</b></label>'
      +'<h3 style="margin:14px 0 6px;font-size:14px">Текущие позиции бота'+(a.positions&&a.positions.length?' ('+a.positions.length+')':'')+'</h3>'+autoPositionsHTML(a.positions)
      +'<hr class="hr"><div class="form"><label>Риск на сделку, %<input id="asRisk" inputmode="decimal" value="'+s.riskPct+'"></label>'
