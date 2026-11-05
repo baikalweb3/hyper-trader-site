@@ -111,7 +111,14 @@ export default async () => {
     // 2) если есть свободный слот — искать новый сигнал
     if (positions.length < settings.maxPositions) {
       const balance = await accountValue(rec.mainAddress, rec.isMainnet !== false).catch(() => null);
-      if (balance && balance > 5) {
+      // Раньше при balance==null/<=5 функция просто молча ничего не делала —
+      // в логах не оставалось никакого следа, почему бот "не торговал". Теперь
+      // explicit-сообщение на каждую причину пропуска, видно в логах Netlify.
+      if (balance == null) {
+        results.push(username + ': не смог получить баланс счёта с Hyperliquid (сеть/адрес?) — пропуск');
+      } else if (balance <= 5) {
+        results.push(username + ': баланс счёта $' + balance.toFixed(2) + ' слишком мал (нужно > $5) — пропуск');
+      } else {
         const coins = Object.entries(ctx).sort((a, b) => b[1].vol - a[1].vol).slice(0, settings.watchN).map(e => e[0]).filter(c => !positions.some(p => p.coin === c));
         const hz = HORIZONS[settings.horizon] || HORIZONS.short;
         const tfSet = new Set(hz.tfs);
@@ -119,23 +126,28 @@ export default async () => {
         const jobs = []; for (const coin of coins) for (const tf of tfSet) jobs.push({ coin, tf });
         await pLimit(jobs, 5, async ({ coin, tf }) => { cache[coin + tf] = await getCandles(coin, tf, 220); });
 
-        let best = null;
+        let best = null, scanned = 0, candidates = 0;
         for (const coin of coins) {
           const tfData = {}; let ok = true;
           for (const tf of tfSet) { if (!cache[coin + tf]) { ok = false; break; } tfData[tf] = cache[coin + tf]; }
           if (!ok) continue;
+          scanned++;
           const f8 = ctx[coin] ? ctx[coin].funding * 800 : 0;
           const a = analyzeGeneric(coin, settings.horizon, tfData, f8);
           if (!a) continue;
-          for (const s of a.sigs) if (s.conf >= settings.minConf && (!best || s.conf > best.conf)) best = s;
+          for (const s of a.sigs) { candidates++; if (s.conf >= settings.minConf && (!best || s.conf > best.conf)) best = s; }
         }
 
-        if (best) {
+        if (!best) {
+          results.push(username + ': баланс $' + balance.toFixed(2) + ', просканировано ' + scanned + '/' + coins.length + ' монет, найдено сигналов ' + candidates + ' — ни один не прошёл порог уверенности ' + settings.minConf + '% — пропуск');
+        } else {
           const risk = Math.abs(best.entry - best.stop);
           const riskUsd = balance * settings.riskPct / 100;
           const size = risk ? riskUsd / risk : 0;
           const assetId = assetIds[best.coin];
-          if (size > 0 && assetId != null) {
+          if (!(size > 0 && assetId != null)) {
+            results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но ' + (assetId == null ? 'не нашли id монеты на бирже' : 'нулевой размер позиции') + ' — пропуск');
+          } else {
             const long = best.side === 'long';
             const limitPx = (long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP)).toPrecision(6);
             try {
@@ -146,11 +158,14 @@ export default async () => {
           }
         }
       }
+    } else {
+      results.push(username + ': все ' + settings.maxPositions + ' слота заняты открытыми позициями — пропуск поиска новых');
     }
 
     await posStore.setJSON('p:' + username, positions);
   }
 
+  console.log('autotrade run: ' + (results.length ? results.join(' | ') : '(нет подключённых пользователей с автоторговлей)'));
   return new Response(JSON.stringify({ ok: true, log: results }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
 
