@@ -56,7 +56,16 @@ async function handle(req) {
   if (req.method === 'GET') {
     const rec = await store.get('w:' + payload.u, { type: 'json' });
     if (!rec) return json({ connected: false });
-    return json({ connected: true, mainAddress: rec.mainAddress, autoTrade: !!rec.autoTrade, isMainnet: rec.isMainnet !== false, settings: rec.settings || {}, updatedAt: rec.updatedAt });
+    // Текущие открытые позиции бота — пишет/читает autotrade.mjs в
+    // hyper-trader-autopos (p:+username). Отдаём их здесь же, чтобы вкладка
+    // "Авто" могла показать, в чём бот сидит ПРЯМО СЕЙЧАС, а не только
+    // отчёты по уже закрытым сделкам.
+    let positions = [];
+    try {
+      const posStore = await getBlobStore('hyper-trader-autopos');
+      positions = (await posStore.get('p:' + payload.u, { type: 'json' })) || [];
+    } catch (e) { /* не критично — просто не покажем позиции */ }
+    return json({ connected: true, mainAddress: rec.mainAddress, autoTrade: !!rec.autoTrade, isMainnet: rec.isMainnet !== false, settings: rec.settings || {}, updatedAt: rec.updatedAt, positions });
   }
 
   if (req.method === 'POST') {

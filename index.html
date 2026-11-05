@@ -1379,6 +1379,21 @@ function autoReportBlock(){
   return '<div class="seg" id="autoRepSeg" style="margin:10px 0"><button data-d="1" class="on">Сутки</button><button data-d="7">Неделя</button><button data-d="30">Месяц</button><button data-d="99999">Всё время</button></div>'
    +'<div id="autoRepBody">'+statBlock(since(DAY),'','Пока нет завершённых автосделок за этот период.')+'</div>';
 }
+// Текущие позиции бота прямо сейчас (не из журнала — журнал пишется только
+// когда сделка УЖЕ закрыта). Данные приходят с сервера (wallet.mjs GET),
+// а текущую цену и "бумажный" результат берём из уже загруженного сканера
+// (S.ctx), если монета в нём есть — отдельный запрос к бирже не нужен.
+function autoPositionsHTML(positions){
+  if(!positions||!positions.length)return '<p class="note">Сейчас бот ни в одной сделке не сидит.</p>';
+  return '<div class="bars" style="margin-top:4px">'+positions.map(p=>{
+    const cx=S.ctx[p.coin],mark=cx?cx.mark:null,long=p.side==='long';
+    const pnlR=mark!=null?((long?mark-p.entry:p.entry-mark)/(Math.abs(p.entry-p.stop)||1)):null;
+    const age=p.openedAt?Math.round((Date.now()-p.openedAt)/3600000):null;
+    return '<div class="card" style="cursor:default"><div class="h">'+sideChip(p.side)+' '+p.coin+'<span class="grow"></span>'+(pnlR!=null?'<span class="mono '+(pnlR>=0?'up':'dn')+'">'+(pnlR>=0?'+':'')+pnlR.toFixed(2)+' R сейчас</span>':'<span class="mut" style="font-size:11px">цена грузится…</span>')+'</div>'
+     +'<div class="l">вход '+fmtPx(p.entry)+' · стоп '+fmtPx(p.stop)+' · цель '+fmtPx(p.target)+' · размер '+p.size+(age!=null?' · открыта '+(age<1?'<1 ч':age+' ч')+' назад':'')+'</div></div>';
+  }).join('')+'</div>'
+   +'<p class="note">Закрывается сервером сам — по стопу, по цели или принудительно через 5 дней, если ни то ни другое не случилось. Обновляется при каждом заходе на эту вкладку.</p>';
+}
 function tabAuto(){
   if(S.auto.noAuth)return '<div class="empty">Войдите или зарегистрируйтесь (по email, вверху), чтобы подключить автоторговлю — ключ привязывается к вашему аккаунту.</div>';
   const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15},a.settings||{});
@@ -1391,7 +1406,8 @@ function tabAuto(){
   }else{
     html+='<div class="lv"><div>Кошелёк<b class="mono" style="font-size:12px">'+a.mainAddress.slice(0,6)+'…'+a.mainAddress.slice(-4)+'</b></div><div>Сеть<b class="'+(a.isMainnet?'dn':'')+'">'+(a.isMainnet?'Mainnet':'Testnet')+'</b></div></div>'
      +'<label class="row" style="display:flex;align-items:center;gap:8px;margin:10px 0"><input type="checkbox" id="awToggle" '+(a.autoTrade?'checked':'')+' style="width:auto"><b>Автоторговля '+(a.autoTrade?'ВКЛЮЧЕНА':'выключена')+'</b></label>'
-     +'<div class="form"><label>Риск на сделку, %<input id="asRisk" inputmode="decimal" value="'+s.riskPct+'"></label>'
+     +'<h3 style="margin:14px 0 6px;font-size:14px">Текущие позиции бота'+(a.positions&&a.positions.length?' ('+a.positions.length+')':'')+'</h3>'+autoPositionsHTML(a.positions)
+     +'<hr class="hr"><div class="form"><label>Риск на сделку, %<input id="asRisk" inputmode="decimal" value="'+s.riskPct+'"></label>'
      +'<label>Горизонт<select id="asHz"><option value="short"'+(s.horizon==='short'?' selected':'')+'>Краткосрочно 1:2</option><option value="intraday"'+(s.horizon==='intraday'?' selected':'')+'>Интрадей 1:3</option><option value="mid"'+(s.horizon==='mid'?' selected':'')+'>Среднесрочно 1:3</option></select></label>'
      +'<label>Макс. одновременных позиций<input id="asMax" inputmode="numeric" value="'+s.maxPositions+'"></label>'
      +'<label>Мин. уверенность сигнала, %<input id="asConf" inputmode="numeric" value="'+s.minConf+'"></label>'
