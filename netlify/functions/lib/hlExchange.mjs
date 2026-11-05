@@ -52,6 +52,24 @@ async function postExchange(isMainnet, payload) {
   return j;
 }
 
+// КРИТИЧНО: Hyperliquid /exchange почти всегда отвечает HTTP 200 даже когда
+// отклоняет сам ордер/действие по бизнес-причине (недостаточно маржи,
+// невалидный размер, плечо нельзя сменить при открытой позиции и т.п.) —
+// сама ошибка лежит внутри JSON-тела (status:'err', или per-order error в
+// response.data.statuses[]). Раньше postExchange() проверял только HTTP-код,
+// поэтому autotrade.mjs считал ЛЮБОЙ ответ без сетевой ошибки успехом и писал
+// "ОТКРЫТА", даже когда ордер реально не исполнился (проверено на practике:
+// лог сказал "ОТКРЫТА AAVE long", а в Order History на Hyperliquid — пусто).
+function assertExchangeOk(j, actionType) {
+  if (!j) throw new Error('Hyperliquid: пустой/невалидный ответ от /exchange');
+  if (j.status !== 'ok') throw new Error('Hyperliquid отклонил запрос: ' + (typeof j.response === 'string' ? j.response : JSON.stringify(j.response)));
+  if (actionType === 'order' && j.response && j.response.data && Array.isArray(j.response.data.statuses)) {
+    const errs = j.response.data.statuses.filter(s => s && s.error);
+    if (errs.length) throw new Error('Hyperliquid отклонил ордер: ' + errs.map(s => s.error).join('; '));
+  }
+  return j;
+}
+
 // coinToAssetId: Hyperliquid ордера адресуются индексом актива (не именем),
 // его нужно взять из meta() (universe[]), тут принимаем готовый assetId.
 export async function placeMarketOrder({ privateKey, isMainnet = true, assetId, isBuy, sizeStr, limitPxStr, reduceOnly = false }) {
@@ -62,7 +80,8 @@ export async function placeMarketOrder({ privateKey, isMainnet = true, assetId, 
   };
   const action = { type: 'order', orders: [order], grouping: 'na' };
   const signature = await signL1Action(privateKey, action, nonce, isMainnet, null);
-  return postExchange(isMainnet, { action, nonce, signature });
+  const j = await postExchange(isMainnet, { action, nonce, signature });
+  return assertExchangeOk(j, 'order');
 }
 
 // Явно выставить плечо для актива ПЕРЕД открытием позиции — раньше бот
@@ -74,7 +93,8 @@ export async function updateLeverage({ privateKey, isMainnet = true, assetId, le
   const nonce = Date.now();
   const action = { type: 'updateLeverage', asset: assetId, isCross, leverage: Math.round(leverage) };
   const signature = await signL1Action(privateKey, action, nonce, isMainnet, null);
-  return postExchange(isMainnet, { action, nonce, signature });
+  const j = await postExchange(isMainnet, { action, nonce, signature });
+  return assertExchangeOk(j, 'updateLeverage');
 }
 
 export async function getAssetMeta(isMainnet = true) {
