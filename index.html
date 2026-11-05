@@ -380,7 +380,7 @@ function pullbackSignal(z){if(z.length<60)return null;const q=z.map(c=>c.c),e2=e
 function breakoutSignal(z){if(z.length<60)return null;const L=z.length-1,x=z[L],a=atr(z);if(!a)return null;const g=z.slice(L-20,L),hi=Math.max(...g.map(c=>c.h)),lo=Math.min(...g.map(c=>c.l)),v=z.map(c=>c.v),av=v.slice(L-20,L).reduce((p,q)=>p+q,0)/20,vr=av?x.v/av:1;if(vr<1.2)return null;if(x.c>hi)return{side:'long',entry:x.c,stop:x.c-1.5*a,atr:a,t:x.t,vr};if(x.c<lo)return{side:'short',entry:x.c,stop:x.c+1.5*a,atr:a,t:x.t,vr};return null}
 
 /* ============ анализ монеты ============ */
-function swingSignal(z,hz){const lb=hz.lookback||24;if(z.length<lb+65)return null;const st=trendState(z);if(!st||!st.atr)return null;const L=z.length-1,x=z[L],a=st.atr,g=z.slice(L-lb,L),hi=Math.max(...g.map(c=>c.h)),lo=Math.min(...g.map(c=>c.l));if(st.score>=2&&x.c>hi)return{side:'long',entry:x.c,stop:Math.min(lo,x.l)-0.5*a,atr:a,t:x.t,brk:true};if(st.score<=-2&&x.c<lo)return{side:'short',entry:x.c,stop:Math.max(hi,x.h)+0.5*a,atr:a,t:x.t,brk:true};return null}
+function swingSignal(z,hz){const lb=hz.lookback||24;if(z.length<lb+65)return null;const st=trendState(z);if(!st||!st.atr)return null;const L=z.length-1,x=z[L],a=st.atr,g=z.slice(L-lb,L),hi=Math.max(...g.map(c=>c.h)),lo=Math.min(...g.map(c=>c.l));const v=z.map(c=>c.v),av=v.slice(L-lb,L).reduce((a,b)=>a+b,0)/lb,vr=av?x.v/av:1;if(vr<1.2)return null;if(st.score>=2&&x.c>hi)return{side:'long',entry:x.c,stop:Math.min(lo,x.l)-0.5*a,atr:a,t:x.t,brk:true,vr};if(st.score<=-2&&x.c<lo)return{side:'short',entry:x.c,stop:Math.max(hi,x.h)+0.5*a,atr:a,t:x.t,brk:true,vr};return null}
 const HORIZONS={
   short:{tfs:ANALYSIS_TF,entryTf:'15m',rr:2,names:{'15m':'15м','1h':'1ч','4h':'4ч'},label:'краткосрочно',eventLabel:'час',
     sigFns:[['pullback',pullbackSignal],['breakout',breakoutSignal]]},
@@ -441,8 +441,31 @@ function resolveSigTrack(){
   const WEEK=7*86400000;let ch=false;
   S.sigTrack.forEach(t=>{
     if(t.resolved)return;
+    const long=t.side==='long';
+    // Сначала честно по истории свечей — раньше резолв смотрел только на
+    // ТЕКУЩУЮ live-цену, а значит если вкладка была закрыта в момент касания
+    // стопа/цели, это никогда не засчитывалось, и сигнал "зависал" навечно
+    // (или пока цена случайно не вернётся к тому же уровню). Теперь, если по
+    // нужному таймфрейму для горизонта сигнала есть кэш свечей, идём по уже
+    // закрытым свечам с момента находки сигнала и смотрим, какая из них
+    // первой пробила хаем/лоу стоп или цель — не зависит от того, была ли
+    // страница открыта в этот момент.
+    const hz=HORIZONS[t.horizon]||HORIZONS.short,c=cache[t.coin+hz.entryTf];
+    if(c&&c.data&&c.data.length){
+      const cs=closed(c.data).filter(x=>x.T>=t.found);
+      for(const x of cs){
+        const hitStop=long?x.l<=t.stop:x.h>=t.stop,hitTarget=long?x.h>=t.target:x.l<=t.target;
+        if(hitStop||hitTarget){
+          // если в одной свече задеты оба уровня — не знаем внутрисвечной
+          // порядок, консервативно считаем, что стоп сработал первым
+          t.resolved=true;t.R=hitStop?-1:t.rr;t.resolvedAt=x.T;ch=true;
+          break;
+        }
+      }
+      if(t.resolved)return;
+    }
     const cx=S.ctx[t.coin];if(!cx)return;
-    const long=t.side==='long',m=cx.mark;
+    const m=cx.mark;
     if(long?m<=t.stop:m>=t.stop){t.resolved=true;t.R=-1;t.resolvedAt=Date.now();ch=true}
     else if(long?m>=t.target:m<=t.target){t.resolved=true;t.R=t.rr;t.resolvedAt=Date.now();ch=true}
     else if(Date.now()-t.found>WEEK){const risk=Math.abs(t.entry-t.stop);t.resolved=true;t.R=((long?m-t.entry:t.entry-m)/risk);t.resolvedAt=Date.now();t.timeout=true;ch=true}
@@ -1281,11 +1304,12 @@ function bindRisk(){
 }
 
 /* ============ журнал: ручные сделки + честная статистика по сигналам ============ */
-function statBlock(rows,title,hint){
+function statBlock(rows,title,hint,unit){
   if(!rows.length)return '<p class="note">'+hint+'</p>';
+  unit=unit||'Сделок';
   const wins=rows.filter(x=>x.R>0).length,wr=wins/rows.length*100,avgR=rows.reduce((a,x)=>a+x.R,0)/rows.length,totR=rows.reduce((a,x)=>a+x.R,0);
   const last20=rows.slice(0,20),wr20=last20.length?last20.filter(x=>x.R>0).length/last20.length*100:null;
-  return '<div class="lv"><div>Сделок<b>'+rows.length+'</b></div><div>Доля в плюс<b class="'+(wr>=50?'up':'dn')+'">'+wr.toFixed(0)+'%</b></div><div>Средний результат<b class="'+(avgR>=0?'up':'dn')+'">'+(avgR>=0?'+':'')+avgR.toFixed(2)+' R</b></div><div>Суммарно<b class="'+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</b></div>'
+  return '<div class="lv"><div>'+unit+'<b>'+rows.length+'</b></div><div>Доля в плюс<b class="'+(wr>=50?'up':'dn')+'">'+wr.toFixed(0)+'%</b></div><div>Средний результат<b class="'+(avgR>=0?'up':'dn')+'">'+(avgR>=0?'+':'')+avgR.toFixed(2)+' R</b></div><div>Суммарно<b class="'+(totR>=0?'up':'dn')+'">'+(totR>=0?'+':'')+totR.toFixed(2)+' R</b></div>'
    +(wr20!==null?'<div>Доля в плюс, последние '+last20.length+'<b class="'+(wr20>=50?'up':'dn')+'">'+wr20.toFixed(0)+'%</b></div>':'')+'</div>';
 }
 // Кривая капитала: накопленная сумма R по сделкам, от самой старой к самой
@@ -1347,7 +1371,7 @@ function tabJournal(){
    +(jr.length>=2?'<canvas id="equity" style="height:140px;margin-top:8px"></canvas><p class="note" style="margin-top:4px">Кривая капитала: сумма R нарастающим итогом от первой сделки до последней.</p>':'')
    +(jr.length?'<div class="bars" style="margin-top:8px">'+jr.slice(0,40).map(x=>'<div class="card" style="cursor:default"><div class="h">'+sideChip(x.side)+' '+x.coin+(x.auto?' <span class="mut" style="font-size:11px">· авто: '+x.reason+'</span>':' <span class="mut" style="font-size:11px">· закрыто вручную</span>')+'<span class="grow"></span><span class="mono '+(x.R>=0?'up':'dn')+'">'+(x.R>=0?'+':'')+x.R.toFixed(2)+' R</span></div><div class="l">вход '+fmtPx(x.entry)+' → выход '+fmtPx(x.exit)+' · '+new Date(x.closedAt).toLocaleString('ru-RU')+'</div></div>').join('')+'</div>'+(jr.length?'<button class="btn sm" id="jClear" style="margin-top:8px">Очистить журнал сделок</button>':''):'')
    +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Статистика по сигналам движка ('+resolved.length+' из '+S.sigTrack.length+', '+pending+' ещё не завершились)</h3>'
-   +statBlock(resolved,'','Пока нет завершившихся сигналов — статистика появится по мере работы приложения.')
+   +statBlock(resolved,'','Пока нет завершившихся сигналов — статистика появится по мере работы приложения.','Сигналов')
    +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">По горизонтам — где реально больше плюса</h4>'+horizonStatTable(resolved):'')
    +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">По дням</h4>'+dayStatTable(resolved):'')
    +(resolved.length?'<h4 style="margin:12px 0 4px;font-size:13px" class="mut">Каждый сигнал — чем закрылся</h4>'+'<div id="sigList">'+sigListHTML(resolved,40)+'</div>'+(resolved.length>40?'<button class="btn sm" id="sigMore" style="margin-top:6px">Показать все ('+resolved.length+')</button>':''):'')
@@ -1396,7 +1420,7 @@ function autoPositionsHTML(positions){
 }
 function tabAuto(){
   if(S.auto.noAuth)return '<div class="empty">Войдите или зарегистрируйтесь (по email, вверху), чтобы подключить автоторговлю — ключ привязывается к вашему аккаунту.</div>';
-  const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15},a.settings||{});
+  const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15,dailyLimitPct:5},a.settings||{});
   let html='<div class="mut" style="font-size:12px;margin-bottom:10px">Бот торгует сам, 24/7, на сервере — не зависит от того, открыта ли эта страница. Вставляется только <b>API-кошелёк</b> (ограниченный ключ без права вывода, создаётся в настройках Hyperliquid), а не ваш основной приватный ключ. Прежде чем включать на реальные деньги — обязательно проверьте на testnet на маленьком размере.</div>';
   if(!a.connected){
     html+='<div class="form"><label>Ключ API-кошелька (64 hex, из Hyperliquid → Settings → API)<input id="awKey" type="password" placeholder="0x…" autocomplete="off"></label>'
@@ -1412,9 +1436,10 @@ function tabAuto(){
      +'<label>Горизонт<select id="asHz"><option value="short"'+(s.horizon==='short'?' selected':'')+'>Краткосрочно 1:2</option><option value="intraday"'+(s.horizon==='intraday'?' selected':'')+'>Интрадей 1:3</option><option value="mid"'+(s.horizon==='mid'?' selected':'')+'>Среднесрочно 1:3</option></select></label>'
      +'<label>Макс. одновременных позиций<input id="asMax" inputmode="numeric" value="'+s.maxPositions+'"></label>'
      +'<label>Мин. уверенность сигнала, %<input id="asConf" inputmode="numeric" value="'+s.minConf+'"></label>'
-     +'<label>Сколько монет сканировать (топ по объёму)<input id="asWatch" inputmode="numeric" value="'+s.watchN+'"></label></div>'
+     +'<label>Сколько монет сканировать (топ по объёму)<input id="asWatch" inputmode="numeric" value="'+s.watchN+'"></label>'
+     +'<label>Дневной лимит потерь, % от баланса<input id="asDaily" inputmode="decimal" value="'+s.dailyLimitPct+'"></label></div>'
      +'<button class="btn sm" id="asSave">Сохранить настройки</button> <button class="btn sm" id="awDisconnect" style="margin-left:6px">Отключить кошелёк</button>'
-     +'<p class="note">Размер позиции считается от риска % на сделку от реального баланса счёта на Hyperliquid (не от введённого вручную числа). Проверка сигналов и открытых позиций — раз в 15 минут. Автоматического аварийного отключения по дневному лимиту потерь нет (по вашему выбору) — следить за лимитом нужно самостоятельно.</p>'
+     +'<p class="note">Размер позиции считается от риска % на сделку от реального баланса счёта на Hyperliquid (не от введённого вручную числа). Проверка сигналов и открытых позиций — раз в 15 минут. Как только убыток за текущий день (UTC) достигает дневного лимита, бот перестаёт открывать новые сделки до следующего дня — уже открытые позиции по-прежнему закрываются по стопу/цели как обычно.</p>'
      +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Отчёты по автоторговле</h3>'+autoReportBlock();
   }
   return html;
@@ -1433,7 +1458,7 @@ function bindAuto(){
     catch(e){alert('Не удалось переключить: '+e.message);toast('Не удалось переключить: '+e.message,'err')}
   };
   const sv=$('#asSave');if(sv)sv.onclick=async()=>{
-    const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value};
+    const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value,dailyLimitPct:$('#asDaily').value};
     try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'settings',settings})});await loadAutoState();renderTab();toast('Настройки сохранены')}
     catch(e){alert('Не удалось сохранить: '+e.message);toast('Не удалось сохранить: '+e.message,'err')}
   };

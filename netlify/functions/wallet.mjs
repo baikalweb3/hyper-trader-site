@@ -127,7 +127,13 @@ async function handle(req) {
         horizon: ['short', 'intraday', 'mid'].includes(s.horizon) ? s.horizon : 'short',
         maxPositions: Math.round(num(s.maxPositions, 1, 10, 3)),
         minConf: Math.round(num(s.minConf, 50, 95, 55)),
-        watchN: Math.round(num(s.watchN, 5, 40, 15))
+        watchN: Math.round(num(s.watchN, 5, 40, 15)),
+        // Максимум потерь за календарный день (UTC), в % от баланса — выше
+        // этого бот не открывает новых позиций до следующего дня (см.
+        // todayLossUsd/lossBudget в autotrade.mjs). Раньше дневной лимит
+        // существовал только для РУЧНЫХ сделок на клиенте, автоторговля его
+        // не видела вообще.
+        dailyLimitPct: num(s.dailyLimitPct, 1, 20, 5)
       };
       rec.updatedAt = Date.now();
       await store.setJSON('w:' + payload.u, rec);

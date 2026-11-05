@@ -77,8 +77,15 @@ function swingSignal(z, hz) {
   const st = trendState(z);
   if (!st || !st.atr) return null;
   const L = z.length - 1, x = z[L], a = st.atr, g = z.slice(L - lb, L), hi = Math.max(...g.map(c => c.h)), lo = Math.min(...g.map(c => c.l));
-  if (st.score >= 2 && x.c > hi) return { side: 'long', entry: x.c, stop: Math.min(lo, x.l) - 0.5 * a, atr: a, t: x.t, brk: true };
-  if (st.score <= -2 && x.c < lo) return { side: 'short', entry: x.c, stop: Math.max(hi, x.h) + 0.5 * a, atr: a, t: x.t, brk: true };
+  // Объёмный фильтр — раньше его тут не было (в отличие от breakoutSignal,
+  // где он есть), поэтому "интрадей" ловил много ложных пробоев диапазона
+  // без реального интереса рынка: цена чуть высовывалась за хай/лоу на
+  // тихом объёме и тут же разворачивалась. Тот же порог ×1.2, что и в
+  // breakoutSignal, для единообразия.
+  const v = z.map(c => c.v), av = v.slice(L - lb, L).reduce((a, b) => a + b, 0) / lb, vr = av ? x.v / av : 1;
+  if (vr < 1.2) return null;
+  if (st.score >= 2 && x.c > hi) return { side: 'long', entry: x.c, stop: Math.min(lo, x.l) - 0.5 * a, atr: a, t: x.t, brk: true, vr };
+  if (st.score <= -2 && x.c < lo) return { side: 'short', entry: x.c, stop: Math.max(hi, x.h) + 0.5 * a, atr: a, t: x.t, brk: true, vr };
   return null;
 }
 const SIG_FNS = {

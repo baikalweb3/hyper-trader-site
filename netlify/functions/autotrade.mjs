@@ -53,6 +53,26 @@ async function journalWrite(username, entry) {
   await jStore.setJSON('j:' + username, rows.slice(0, 500));
 }
 
+// Дневной лимит потерь — раньше проверялся только на клиенте при РУЧНОМ
+// нажатии "Взять сделку" (index.html), а сама автоторговля (эта функция)
+// его вообще не видела и могла открывать новые позиции весь день подряд,
+// сколько бы ни было уже слито с утра. Теперь считаем сегодняшний убыток по
+// уже закрытым авто-сделкам из того же журнала, которым эта функция сама и
+// пишет записи (auto:true), и останавливаем поиск новых входов, если дневной
+// бюджет потерь исчерпан — до следующего календарного дня (UTC).
+async function todayLossUsd(username) {
+  const jStore = getStore('hyper-trader-journal');
+  const rows = (await jStore.get('j:' + username, { type: 'json' })) || [];
+  const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+  const cutoff = dayStart.getTime();
+  let loss = 0;
+  for (const r of rows) {
+    if (!r.auto || !r.closedAt || r.closedAt < cutoff) continue;
+    if (typeof r.pnlUsd === 'number' && r.pnlUsd < 0) loss += -r.pnlUsd;
+  }
+  return loss;
+}
+
 export default async () => {
   const wStore = getStore('hyper-trader-wallets');
   const index = (await wStore.get('windex', { type: 'json' })) || [];
@@ -72,7 +92,7 @@ export default async () => {
   for (const username of index) {
     const rec = await wStore.get('w:' + username, { type: 'json' });
     if (!rec || !rec.autoTrade) continue;
-    const settings = Object.assign({ riskPct: 1, horizon: 'short', maxPositions: DEFAULT_MAX_POS, minConf: DEFAULT_MIN_CONF, watchN: 15 }, rec.settings || {});
+    const settings = Object.assign({ riskPct: 1, horizon: 'short', maxPositions: DEFAULT_MAX_POS, minConf: DEFAULT_MIN_CONF, watchN: 15, dailyLimitPct: 5 }, rec.settings || {});
     const assetIds = assetIdsByNet[rec.isMainnet !== false ? 'main' : 'test'];
     const posStore = getStore('hyper-trader-autopos');
     let positions = (await posStore.get('p:' + username, { type: 'json' })) || [];
@@ -114,10 +134,14 @@ export default async () => {
       // Раньше при balance==null/<=5 функция просто молча ничего не делала —
       // в логах не оставалось никакого следа, почему бот "не торговал". Теперь
       // explicit-сообщение на каждую причину пропуска, видно в логах Netlify.
+      const lossToday = balance != null ? await todayLossUsd(username).catch(() => 0) : 0;
+      const lossBudget = balance != null ? balance * settings.dailyLimitPct / 100 : 0;
       if (balance == null) {
         results.push(username + ': не смог получить баланс счёта с Hyperliquid (сеть/адрес?) — пропуск');
       } else if (balance <= 5) {
         results.push(username + ': баланс счёта $' + balance.toFixed(2) + ' слишком мал (нужно > $5) — пропуск');
+      } else if (lossToday >= lossBudget) {
+        results.push(username + ': дневной лимит потерь исчерпан (-$' + lossToday.toFixed(2) + ' из допустимых $' + lossBudget.toFixed(2) + ') — новые сделки до завтра не открываются');
       } else {
         const coins = Object.entries(ctx).sort((a, b) => b[1].vol - a[1].vol).slice(0, settings.watchN).map(e => e[0]).filter(c => !positions.some(p => p.coin === c));
         const hz = HORIZONS[settings.horizon] || HORIZONS.short;
