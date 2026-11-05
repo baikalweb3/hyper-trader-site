@@ -128,7 +128,10 @@ export function analyzeGeneric(coin, horizonKey, tfData, fundingPct8h) {
     if ((s.side === 'long' && f8 > 0.03) || (s.side === 'short' && f8 < -0.03)) { w -= 10; notes.push('funding против позиции'); }
     w = Math.max(5, Math.min(95, w));
     const target = s.side === 'long' ? s.entry + R * risk : s.entry - R * risk;
-    O.sigs.push({ id: coin + '|' + E + '|' + kind + '|' + s.side + '|' + s.t, coin, kind, side: s.side, entry: s.entry, stop: s.stop, target, rr: R, conf: w, notes, t: s.t, horizon: horizonKey });
+    // atr сохраняем в сигнал — нужен автоторговле для трейлинг-стопа после
+    // частичного закрытия на 1R (см. autotrade.mjs): без него пришлось бы
+    // пересчитывать ATR заново при каждой проверке позиции.
+    O.sigs.push({ id: coin + '|' + E + '|' + kind + '|' + s.side + '|' + s.t, coin, kind, side: s.side, entry: s.entry, stop: s.stop, target, rr: R, conf: w, notes, t: s.t, horizon: horizonKey, atr: s.atr });
   }
   return O;
 }

@@ -100,29 +100,76 @@ export default async () => {
     let apiKey;
     try { apiKey = decryptKey(rec); } catch (e) { continue; }
 
-    // 1) закрыть то, что уже достигло стопа/цели
+    // 1) управление открытыми позициями: частичное закрытие на 1R → стоп в
+    // безубыток → трейлинг-стоп по ATR на остатке, и обычное закрытие по
+    // стопу/цели/тайм-ауту.
+    //
+    // Раньше позиция всегда закрывалась целиком либо по фиксированному стопу,
+    // либо по фиксированной цели (rr×risk) — трейд с сильным движением давал
+    // ровно 2R и ни центом больше, а трейд с слабым движением не давал забрать
+    // частичную прибыль перед разворотом. Теперь: как только цена доходит до
+    // 1R — закрываем половину объёма рынком, подтягиваем стоп на оставшуюся
+    // половину в безубыток (entry), и дальше ведём его трейлингом (экстремум
+    // цены за время удержания минус/плюс 1.5×ATR, подтягивается только в
+    // выгодную сторону) — так сильный тренд сам "довозит" сделку дальше
+    // фиксированных 2R, а слабый выбивает раньше на меньшем, но всё равно
+    // положительном результате. Фиксированный target после частичного
+    // закрытия больше не используется — его заменяет трейлинг.
     const stillOpen = [];
     for (const p of positions) {
       const mark = ctx[p.coin] ? ctx[p.coin].mark : null;
       if (mark == null) { stillOpen.push(p); continue; }
       const long = p.side === 'long';
+      const origStop = p.origStop != null ? p.origStop : p.stop;
+      const risk = Math.abs(p.entry - origStop);
+
+      // 1a) частичное закрытие на 1R (один раз за сделку)
+      if (!p.partialTaken && risk > 0) {
+        const oneR = long ? p.entry + risk : p.entry - risk;
+        const hit1R = long ? mark >= oneR : mark <= oneR;
+        if (hit1R) {
+          try {
+            const assetId = assetIds[p.coin];
+            const half = (parseFloat(p.size) / 2);
+            const halfStr = half.toPrecision(5);
+            const closePx = long ? (mark * (1 - SLIP)).toPrecision(6) : (mark * (1 + SLIP)).toPrecision(6);
+            await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: !long, sizeStr: halfStr, limitPxStr: closePx, reduceOnly: true });
+            const pnlUsd = (long ? mark - p.entry : p.entry - mark) * half;
+            await journalWrite(username, { id: 'atp' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R: 1, pnlUsd, closedAt: Date.now(), auto: true, reason: 'autotrade-partial', partial: true });
+            p.size = (parseFloat(p.size) - half).toPrecision(5);
+            p.partialTaken = true;
+            p.stop = p.entry; // безубыток на остатке
+            p.trailExtreme = mark;
+            results.push(username + ': ' + p.coin + ' частично закрыт 50% на 1R ($' + pnlUsd.toFixed(2) + '), стоп переведён в безубыток, остаток идёт трейлингом');
+          } catch (e) { results.push(username + ': ОШИБКА частичного закрытия ' + p.coin + ': ' + e.message); }
+        }
+      }
+
+      // 1b) трейлинг-стоп на остатке после частичного закрытия
+      if (p.partialTaken && p.atr) {
+        p.trailExtreme = long ? Math.max(p.trailExtreme != null ? p.trailExtreme : mark, mark) : Math.min(p.trailExtreme != null ? p.trailExtreme : mark, mark);
+        const trailCandidate = long ? p.trailExtreme - 1.5 * p.atr : p.trailExtreme + 1.5 * p.atr;
+        if (long && trailCandidate > p.stop) p.stop = trailCandidate;
+        if (!long && trailCandidate < p.stop) p.stop = trailCandidate;
+      }
+
+      // 1c) закрытие по стопу / (не-частичной) цели / тайм-ауту
       const hitStop = long ? mark <= p.stop : mark >= p.stop;
-      const hitTarget = long ? mark >= p.target : mark <= p.target;
+      const hitTarget = !p.partialTaken && (long ? mark >= p.target : mark <= p.target);
       const timedOut = !hitStop && !hitTarget && p.openedAt && (Date.now() - p.openedAt > MAX_HOLD_MS);
       if (hitStop || hitTarget || timedOut) {
         try {
           const assetId = assetIds[p.coin];
           const closePx = long ? (mark * (1 - SLIP)).toPrecision(6) : (mark * (1 + SLIP)).toPrecision(6);
           await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: !long, sizeStr: p.size, limitPxStr: closePx, reduceOnly: true });
-          const risk = Math.abs(p.entry - p.stop);
-          const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1;
-          const reason = timedOut ? 'autotrade-timeout' : 'autotrade';
+          const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : (p.partialTaken ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1);
+          const reason = timedOut ? 'autotrade-timeout' : (p.partialTaken ? 'autotrade-trail' : 'autotrade');
           // Реальный $-результат сделки (не только R) — нужен, чтобы считать
           // комиссию/процент с заработка пользователя в админке, не оценивая
           // его на глаз через риск%, который мог меняться со временем.
           const pnlUsd = (long ? mark - p.entry : p.entry - mark) * parseFloat(p.size);
           await journalWrite(username, { id: 'at' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R, pnlUsd, closedAt: Date.now(), auto: true, reason });
-          results.push(username + ': закрыт ' + p.coin + ' ' + (hitTarget ? 'по цели' : timedOut ? 'по тайм-ауту (5 дней)' : 'по стопу'));
+          results.push(username + ': закрыт ' + p.coin + ' ' + (hitTarget ? 'по цели' : timedOut ? 'по тайм-ауту (5 дней)' : p.partialTaken ? 'по трейлинг-стопу' : 'по стопу'));
         } catch (e) { stillOpen.push(p); results.push(username + ': ОШИБКА закрытия ' + p.coin + ': ' + e.message); }
       } else stillOpen.push(p);
     }
@@ -176,7 +223,10 @@ export default async () => {
             const limitPx = (long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP)).toPrecision(6);
             try {
               await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: long, sizeStr: size.toPrecision(5), limitPxStr: limitPx });
-              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, target: best.target, rr: best.rr, size: size.toPrecision(5), openedAt: Date.now() });
+              // origStop/atr нужны для частичного закрытия на 1R и трейлинг-стопа
+              // (см. блок 1a/1b выше) — origStop фиксирует исходный риск сделки,
+              // т.к. p.stop после частичного закрытия двигается (безубыток, трейлинг).
+              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, origStop: best.stop, target: best.target, rr: best.rr, atr: best.atr, size: size.toPrecision(5), openedAt: Date.now(), partialTaken: false, trailExtreme: null });
               results.push(username + ': ОТКРЫТА ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%)');
             } catch (e) { results.push(username + ': ОШИБКА открытия ' + best.coin + ': ' + e.message); }
           }
