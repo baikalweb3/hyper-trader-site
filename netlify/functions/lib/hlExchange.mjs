@@ -65,6 +65,18 @@ export async function placeMarketOrder({ privateKey, isMainnet = true, assetId, 
   return postExchange(isMainnet, { action, nonce, signature });
 }
 
+// Явно выставить плечо для актива ПЕРЕД открытием позиции — раньше бот
+// вообще не трогал плечо и ордер открывался с тем, что уже было настроено на
+// аккаунте (могло быть что угодно, вплоть до максимального для актива), из-за
+// чего цена ликвидации могла оказаться ближе стопа. isCross=true — то же
+// кросс-маржинальное плечо, что показывает Hyperliquid UI по умолчанию.
+export async function updateLeverage({ privateKey, isMainnet = true, assetId, leverage, isCross = true }) {
+  const nonce = Date.now();
+  const action = { type: 'updateLeverage', asset: assetId, isCross, leverage: Math.round(leverage) };
+  const signature = await signL1Action(privateKey, action, nonce, isMainnet, null);
+  return postExchange(isMainnet, { action, nonce, signature });
+}
+
 export async function getAssetMeta(isMainnet = true) {
   const base = isMainnet ? MAINNET_API : TESTNET_API;
   const r = await fetch(base + '/info', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'meta' }) });

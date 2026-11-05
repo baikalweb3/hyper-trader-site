@@ -1424,7 +1424,7 @@ function autoPositionsHTML(positions){
 }
 function tabAuto(){
   if(S.auto.noAuth)return '<div class="empty">Войдите или зарегистрируйтесь (по email, вверху), чтобы подключить автоторговлю — ключ привязывается к вашему аккаунту.</div>';
-  const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15,dailyLimitPct:5},a.settings||{});
+  const a=S.auto,s=Object.assign({riskPct:1,horizon:'short',maxPositions:3,minConf:55,watchN:15,dailyLimitPct:5,leverage:3},a.settings||{});
   let html='<div class="mut" style="font-size:12px;margin-bottom:10px">Бот торгует сам, 24/7, на сервере — не зависит от того, открыта ли эта страница. Вставляется только <b>API-кошелёк</b> (ограниченный ключ без права вывода, создаётся в настройках Hyperliquid), а не ваш основной приватный ключ. Прежде чем включать на реальные деньги — обязательно проверьте на testnet на маленьком размере.</div>';
   if(!a.connected){
     html+='<div class="form"><label>Ключ API-кошелька (64 hex, из Hyperliquid → Settings → API)<input id="awKey" type="password" placeholder="0x…" autocomplete="off"></label>'
@@ -1441,9 +1441,10 @@ function tabAuto(){
      +'<label>Макс. одновременных позиций<input id="asMax" inputmode="numeric" value="'+s.maxPositions+'"></label>'
      +'<label>Мин. уверенность сигнала, %<input id="asConf" inputmode="numeric" value="'+s.minConf+'"></label>'
      +'<label>Сколько монет сканировать (топ по объёму)<input id="asWatch" inputmode="numeric" value="'+s.watchN+'"></label>'
-     +'<label>Дневной лимит потерь, % от баланса<input id="asDaily" inputmode="decimal" value="'+s.dailyLimitPct+'"></label></div>'
+     +'<label>Дневной лимит потерь, % от баланса<input id="asDaily" inputmode="decimal" value="'+s.dailyLimitPct+'"></label>'
+     +'<label>Плечо (×)<input id="asLev" inputmode="numeric" value="'+s.leverage+'"></label></div>'
      +'<button class="btn sm" id="asSave">Сохранить настройки</button> <button class="btn sm" id="awDisconnect" style="margin-left:6px">Отключить кошелёк</button>'
-     +'<p class="note">Размер позиции считается от риска % на сделку от реального баланса счёта на Hyperliquid (не от введённого вручную числа). Проверка сигналов и открытых позиций — раз в 15 минут. Как только убыток за текущий день (UTC) достигает дневного лимита, бот перестаёт открывать новые сделки до следующего дня — уже открытые позиции по-прежнему закрываются по стопу/цели как обычно.</p>'
+     +'<p class="note">Размер позиции считается от риска % на сделку от реального баланса счёта на Hyperliquid (не от введённого вручную числа). Проверка сигналов и открытых позиций — раз в 15 минут. Как только убыток за текущий день (UTC) достигает дневного лимита, бот перестаёт открывать новые сделки до следующего дня — уже открытые позиции по-прежнему закрываются по стопу/цели как обычно. Плечо бот выставляет на бирже сам перед каждой новой сделкой (кросс-маржа) и не берёт сигнал, если стоп дальше безопасной дистанции до ликвидации при выбранном плече.</p>'
      +'<hr class="hr"><h3 style="margin:14px 0 6px;font-size:14px">Отчёты по автоторговле</h3>'+autoReportBlock();
   }
   return html;
@@ -1462,7 +1463,7 @@ function bindAuto(){
     catch(e){alert('Не удалось переключить: '+e.message);toast('Не удалось переключить: '+e.message,'err')}
   };
   const sv=$('#asSave');if(sv)sv.onclick=async()=>{
-    const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value,dailyLimitPct:$('#asDaily').value};
+    const settings={riskPct:$('#asRisk').value,horizon:$('#asHz').value,maxPositions:$('#asMax').value,minConf:$('#asConf').value,watchN:$('#asWatch').value,dailyLimitPct:$('#asDaily').value,leverage:$('#asLev').value};
     try{await apiCall('wallet',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.auth.token},body:JSON.stringify({action:'settings',settings})});await loadAutoState();renderTab();toast('Настройки сохранены')}
     catch(e){alert('Не удалось сохранить: '+e.message);toast('Не удалось сохранить: '+e.message,'err')}
   };

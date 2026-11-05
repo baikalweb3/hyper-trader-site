@@ -133,7 +133,13 @@ async function handle(req) {
         // todayLossUsd/lossBudget в autotrade.mjs). Раньше дневной лимит
         // существовал только для РУЧНЫХ сделок на клиенте, автоторговля его
         // не видела вообще.
-        dailyLimitPct: num(s.dailyLimitPct, 1, 20, 5)
+        dailyLimitPct: num(s.dailyLimitPct, 1, 20, 5),
+        // Плечо, которое автоторговля явно выставляет на аккаунте перед
+        // КАЖДЫМ новым ордером (см. autotrade.mjs) — раньше бот вообще не
+        // трогал плечо и использовал то, что уже было настроено на бирже для
+        // актива. Верхняя граница 10x — выше уже не даём через UI намеренно,
+        // чтобы случайно не выставить что-то совсем рискованное.
+        leverage: Math.round(num(s.leverage, 1, 10, 3))
       };
       rec.updatedAt = Date.now();
       await store.setJSON('w:' + payload.u, rec);

@@ -15,12 +15,18 @@
 // testnet (isMainnet:false в настройках кошелька) на маленьком размере.
 import { getStore } from '@netlify/blobs';
 import { analyzeGeneric, HORIZONS, IV } from './lib/signals.mjs';
-import { placeMarketOrder, getAssetMeta } from './lib/hlExchange.mjs';
+import { placeMarketOrder, getAssetMeta, updateLeverage } from './lib/hlExchange.mjs';
 import { decryptKey } from './wallet.mjs';
 
 const API = 'https://api.hyperliquid.xyz/info';
 const DEFAULT_MIN_CONF = 55;
 const DEFAULT_MAX_POS = 3;
+// Плечо по умолчанию для новых позиций, если пользователь не задал своё —
+// намеренно консервативное (кросс-маржа). Выставляется явно на аккаунте
+// перед КАЖДЫМ новым ордером (см. блок открытия позиции ниже), а не
+// предполагается — раньше бот вообще не трогал плечо и использовал то, что
+// уже было настроено на Hyperliquid для актива, что могло быть чем угодно.
+const DEFAULT_LEVERAGE = 3;
 const SLIP = 0.003; // допустимое проскальзывание на IOC-ордере, защита от аномальной цены
 const MAX_HOLD_MS = 5 * 86400000; // принудительно закрыть реальную позицию, если за 5 дней цена не дошла ни до стопа, ни до цели (позиция не должна висеть бесконечно)
 
@@ -92,7 +98,7 @@ export default async () => {
   for (const username of index) {
     const rec = await wStore.get('w:' + username, { type: 'json' });
     if (!rec || !rec.autoTrade) continue;
-    const settings = Object.assign({ riskPct: 1, horizon: 'short', maxPositions: DEFAULT_MAX_POS, minConf: DEFAULT_MIN_CONF, watchN: 15, dailyLimitPct: 5 }, rec.settings || {});
+    const settings = Object.assign({ riskPct: 1, horizon: 'short', maxPositions: DEFAULT_MAX_POS, minConf: DEFAULT_MIN_CONF, watchN: 15, dailyLimitPct: 5, leverage: DEFAULT_LEVERAGE }, rec.settings || {});
     const assetIds = assetIdsByNet[rec.isMainnet !== false ? 'main' : 'test'];
     const posStore = getStore('hyper-trader-autopos');
     let positions = (await posStore.get('p:' + username, { type: 'json' })) || [];
@@ -216,12 +222,29 @@ export default async () => {
           const riskUsd = balance * settings.riskPct / 100;
           const size = risk ? riskUsd / risk : 0;
           const assetId = assetIds[best.coin];
-          if (!(size > 0 && assetId != null)) {
+          // Проверка "не ближе ли ликвидация, чем стоп": при кросс-марже точная
+          // цена ликвидации зависит от всего аккаунта, но грубая безопасная
+          // оценка для отдельной позиции — расстояние до ликвидации ≈ entry/leverage.
+          // Если стоп дальше этой дистанции (с запасом 20%), цена, скорее всего,
+          // дойдёт до ликвидации раньше стопа — такую сделку не открываем вообще,
+          // а не просто рискуем получить убыток больше расчётного 1R.
+          const stopPct = best.entry ? risk / best.entry : 1;
+          const liqSafetyPct = settings.leverage ? (1 / settings.leverage) * 0.8 : 1;
+          const liqTooClose = stopPct >= liqSafetyPct;
+          if (liqTooClose) {
+            results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но стоп (' + (stopPct * 100).toFixed(2) + '% от цены) дальше безопасной дистанции до ликвидации при плече ' + settings.leverage + 'x — пропуск');
+          } else if (!(size > 0 && assetId != null)) {
             results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но ' + (assetId == null ? 'не нашли id монеты на бирже' : 'нулевой размер позиции') + ' — пропуск');
           } else {
             const long = best.side === 'long';
             const limitPx = (long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP)).toPrecision(6);
             try {
+              // Плечо выставляем явно перед КАЖДЫМ новым ордером — не
+              // полагаемся на то, что уже настроено на аккаунте для актива.
+              // Ошибку выставления плеча не считаем фатальной для сделки (биржа
+              // могла уже иметь такое же плечо и просто не дать его "обновить"),
+              // но логируем, чтобы было видно в логах Netlify.
+              await updateLeverage({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, leverage: settings.leverage }).catch(e => results.push(username + ': не удалось выставить плечо ' + settings.leverage + 'x для ' + best.coin + ': ' + e.message));
               await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: long, sizeStr: size.toPrecision(5), limitPxStr: limitPx });
               // origStop/atr нужны для частичного закрытия на 1R и трейлинг-стопа
               // (см. блок 1a/1b выше) — origStop фиксирует исходный риск сделки,
