@@ -15,7 +15,7 @@
 // testnet (isMainnet:false в настройках кошелька) на маленьком размере.
 import { getStore } from '@netlify/blobs';
 import { analyzeGeneric, HORIZONS, IV } from './lib/signals.mjs';
-import { placeMarketOrder, getAssetMeta, updateLeverage } from './lib/hlExchange.mjs';
+import { placeMarketOrder, getAssetMeta, updateLeverage, formatSize, formatPrice } from './lib/hlExchange.mjs';
 import { decryptKey } from './wallet.mjs';
 
 const API = 'https://api.hyperliquid.xyz/info';
@@ -135,14 +135,15 @@ export default async () => {
         const hit1R = long ? mark >= oneR : mark <= oneR;
         if (hit1R) {
           try {
-            const assetId = assetIds[p.coin];
+            const am = assetIds[p.coin];
+            if (!am) throw new Error('монета пропала из списка активов биржи');
             const half = (parseFloat(p.size) / 2);
-            const halfStr = half.toPrecision(5);
-            const closePx = long ? (mark * (1 - SLIP)).toPrecision(6) : (mark * (1 + SLIP)).toPrecision(6);
-            await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: !long, sizeStr: halfStr, limitPxStr: closePx, reduceOnly: true });
+            const halfStr = formatSize(half, am.szDecimals);
+            const closePx = formatPrice(long ? mark * (1 - SLIP) : mark * (1 + SLIP), am.szDecimals);
+            await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, isBuy: !long, sizeStr: halfStr, limitPxStr: closePx, reduceOnly: true });
             const pnlUsd = (long ? mark - p.entry : p.entry - mark) * half;
             await journalWrite(username, { id: 'atp' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R: 1, pnlUsd, closedAt: Date.now(), auto: true, reason: 'autotrade-partial', partial: true });
-            p.size = (parseFloat(p.size) - half).toPrecision(5);
+            p.size = formatSize(parseFloat(p.size) - half, am.szDecimals);
             p.partialTaken = true;
             p.stop = p.entry; // безубыток на остатке
             p.trailExtreme = mark;
@@ -165,9 +166,10 @@ export default async () => {
       const timedOut = !hitStop && !hitTarget && p.openedAt && (Date.now() - p.openedAt > MAX_HOLD_MS);
       if (hitStop || hitTarget || timedOut) {
         try {
-          const assetId = assetIds[p.coin];
-          const closePx = long ? (mark * (1 - SLIP)).toPrecision(6) : (mark * (1 + SLIP)).toPrecision(6);
-          await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: !long, sizeStr: p.size, limitPxStr: closePx, reduceOnly: true });
+          const am = assetIds[p.coin];
+          if (!am) throw new Error('монета пропала из списка активов биржи');
+          const closePx = formatPrice(long ? mark * (1 - SLIP) : mark * (1 + SLIP), am.szDecimals);
+          await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, isBuy: !long, sizeStr: formatSize(parseFloat(p.size), am.szDecimals), limitPxStr: closePx, reduceOnly: true });
           const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : (p.partialTaken ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1);
           const reason = timedOut ? 'autotrade-timeout' : (p.partialTaken ? 'autotrade-trail' : 'autotrade');
           // Реальный $-результат сделки (не только R) — нужен, чтобы считать
@@ -221,7 +223,7 @@ export default async () => {
           const risk = Math.abs(best.entry - best.stop);
           const riskUsd = balance * settings.riskPct / 100;
           const size = risk ? riskUsd / risk : 0;
-          const assetId = assetIds[best.coin];
+          const am = assetIds[best.coin];
           // Проверка "не ближе ли ликвидация, чем стоп": при кросс-марже точная
           // цена ликвидации зависит от всего аккаунта, но грубая безопасная
           // оценка для отдельной позиции — расстояние до ликвидации ≈ entry/leverage.
@@ -233,23 +235,29 @@ export default async () => {
           const liqTooClose = stopPct >= liqSafetyPct;
           if (liqTooClose) {
             results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но стоп (' + (stopPct * 100).toFixed(2) + '% от цены) дальше безопасной дистанции до ликвидации при плече ' + settings.leverage + 'x — пропуск');
-          } else if (!(size > 0 && assetId != null)) {
-            results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но ' + (assetId == null ? 'не нашли id монеты на бирже' : 'нулевой размер позиции') + ' — пропуск');
+          } else if (!(size > 0 && am != null)) {
+            results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но ' + (am == null ? 'не нашли id монеты на бирже' : 'нулевой размер позиции') + ' — пропуск');
           } else {
             const long = best.side === 'long';
-            const limitPx = (long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP)).toPrecision(6);
+            const limitPx = formatPrice(long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP), am.szDecimals);
+            const sizeStr = formatSize(size, am.szDecimals);
             try {
+              if (parseFloat(sizeStr) <= 0) throw new Error('размер позиции после округления под точность актива (' + am.szDecimals + ' знаков) стал нулевым — риск% слишком мал для этой монеты при текущем балансе');
               // Плечо выставляем явно перед КАЖДЫМ новым ордером — не
               // полагаемся на то, что уже настроено на аккаунте для актива.
+              // isCross берём из meta: некоторые активы (например HYPE на
+              // testnet) торгуются ТОЛЬКО с изолированной маржой, и Hyperliquid
+              // отклоняет updateLeverage с isCross:true для них ("Cross margin
+              // is not allowed for this asset") — раньше всегда слали true.
               // Ошибку выставления плеча не считаем фатальной для сделки (биржа
               // могла уже иметь такое же плечо и просто не дать его "обновить"),
               // но логируем, чтобы было видно в логах Netlify.
-              await updateLeverage({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, leverage: settings.leverage }).catch(e => results.push(username + ': не удалось выставить плечо ' + settings.leverage + 'x для ' + best.coin + ': ' + e.message));
-              await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId, isBuy: long, sizeStr: size.toPrecision(5), limitPxStr: limitPx });
+              await updateLeverage({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, leverage: settings.leverage, isCross: !am.onlyIsolated }).catch(e => results.push(username + ': не удалось выставить плечо ' + settings.leverage + 'x для ' + best.coin + ': ' + e.message));
+              await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, isBuy: long, sizeStr, limitPxStr: limitPx });
               // origStop/atr нужны для частичного закрытия на 1R и трейлинг-стопа
               // (см. блок 1a/1b выше) — origStop фиксирует исходный риск сделки,
               // т.к. p.stop после частичного закрытия двигается (безубыток, трейлинг).
-              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, origStop: best.stop, target: best.target, rr: best.rr, atr: best.atr, size: size.toPrecision(5), openedAt: Date.now(), partialTaken: false, trailExtreme: null });
+              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, origStop: best.stop, target: best.target, rr: best.rr, atr: best.atr, size: sizeStr, openedAt: Date.now(), partialTaken: false, trailExtreme: null });
               results.push(username + ': ОТКРЫТА ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%)');
             } catch (e) { results.push(username + ': ОШИБКА открытия ' + best.coin + ': ' + e.message); }
           }
