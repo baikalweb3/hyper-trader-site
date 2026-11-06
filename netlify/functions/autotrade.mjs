@@ -19,6 +19,7 @@ import { placeMarketOrder, getAssetMeta, updateLeverage, formatSize, formatPrice
 import { decryptKey } from './wallet.mjs';
 
 const API = 'https://api.hyperliquid.xyz/info';
+const TESTNET_API = 'https://api.hyperliquid-testnet.xyz/info';
 const DEFAULT_MIN_CONF = 55;
 const DEFAULT_MAX_POS = 3;
 // Плечо по умолчанию для новых позиций, если пользователь не задал своё —
@@ -27,7 +28,14 @@ const DEFAULT_MAX_POS = 3;
 // предполагается — раньше бот вообще не трогал плечо и использовал то, что
 // уже было настроено на Hyperliquid для актива, что могло быть чем угодно.
 const DEFAULT_LEVERAGE = 3;
-const SLIP = 0.003; // допустимое проскальзывание на IOC-ордере, защита от аномальной цены
+// Допустимое проскальзывание на IOC-ордере — защита от аномальной цены, но
+// одновременно это "запас прочности" для закрывающих ордеров, чтобы гарантированно
+// пересечь реальный стакан (особенно на testnet, где книга заявок намного тоньше
+// mainnet). На ВХОД берём меньший запас (цена важнее), на ЗАКРЫТИЕ — больший:
+// позицию нужно гарантированно закрыть, а не оставить висеть из-за того, что
+// IOC не дотянулся на пару тиков до ближайшей реальной заявки.
+const SLIP_OPEN = 0.003;
+const SLIP_CLOSE = 0.015;
 const MAX_HOLD_MS = 5 * 86400000; // принудительно закрыть реальную позицию, если за 5 дней цена не дошла ни до стопа, ни до цели (позиция не должна висеть бесконечно)
 
 async function post(body, base) {
@@ -35,10 +43,16 @@ async function post(body, base) {
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
-async function getCandles(coin, tf, n) {
+async function getCandles(coin, tf, n, base) {
   const end = Date.now(), start = end - n * IV[tf];
-  const raw = await post({ type: 'candleSnapshot', req: { coin, interval: tf, startTime: start, endTime: end } });
+  const raw = await post({ type: 'candleSnapshot', req: { coin, interval: tf, startTime: start, endTime: end } }, base);
   return raw.map(x => ({ t: x.t, T: x.T, o: +x.o, h: +x.h, l: +x.l, c: +x.c, v: +x.v }));
+}
+async function buildCtx(base) {
+  const [meta, ctxs] = await post({ type: 'metaAndAssetCtxs' }, base);
+  const ctx = {};
+  meta.universe.forEach((u, i) => { const c = ctxs[i]; if (!c || u.isDelisted) return; ctx[u.name] = { funding: +c.funding, vol: +c.dayNtlVlm, mark: +c.markPx }; });
+  return ctx;
 }
 async function pLimit(items, n, fn) {
   const out = []; let i = 0;
@@ -47,7 +61,7 @@ async function pLimit(items, n, fn) {
   return out;
 }
 async function accountValue(mainAddress, isMainnet) {
-  const base = isMainnet ? API : 'https://api.hyperliquid-testnet.xyz/info';
+  const base = isMainnet ? API : TESTNET_API;
   const st = await post({ type: 'clearinghouseState', user: mainAddress }, base);
   return st && st.marginSummary ? +st.marginSummary.accountValue : null;
 }
@@ -84,22 +98,40 @@ export default async () => {
   const index = (await wStore.get('windex', { type: 'json' })) || [];
   if (!index.length) return new Response('нет подключённых кошельков', { status: 200 });
 
-  const [meta, ctxs] = await post({ type: 'metaAndAssetCtxs' });
-  const ctx = {};
-  meta.universe.forEach((u, i) => { const c = ctxs[i]; if (!c || u.isDelisted) return; ctx[u.name] = { funding: +c.funding, vol: +c.dayNtlVlm, mark: +c.markPx }; });
+  // И цены (ctx), и список активов (assetIds) тянем ОТДЕЛЬНО для mainnet и
+  // testnet. Раньше ctx (текущие mark-цены, используемые для проверки стопа/
+  // цели/1R и для расчёта цены выходного IOC-ордера) всегда бралась с mainnet
+  // через post() без явного base — даже для testnet-пользователей. Ордер при
+  // этом уходил на testnet биржу с ценой, посчитанной по mainnet-котировке:
+  // большую часть времени цены почти совпадают, но при расхождении (или
+  // просто при движении цены между вызовами) IOC-ордер на закрытие переставал
+  // пересекать реальный testnet-стакан и Hyperliquid стабильно отвечал "Order
+  // could not immediately match against any resting orders" — ровно это
+  // ловила позиция по BTC, которая не могла закрыться много часов подряд.
+  const ctxByNet = {
+    main: await buildCtx(API).catch(() => ({})),
+    test: await buildCtx(TESTNET_API).catch(() => ({}))
+  };
   // Индексы активов у mainnet и testnet Hyperliquid могут отличаться — тянем
   // оба списка один раз, а не угадываем по одному из них для всех пользователей.
   const assetIdsByNet = {
     main: await getAssetMeta(true).catch(() => ({})),
     test: await getAssetMeta(false).catch(() => ({}))
   };
+  // Кэш свечей (для поиска новых сигналов) — тоже должен быть своим для каждой
+  // сети по той же причине; кэшируем по сети, а не глобально, чтобы не дёргать
+  // API повторно для нескольких пользователей одной сети за один прогон.
+  const candleCacheByNet = { main: {}, test: {} };
 
   const results = [];
   for (const username of index) {
     const rec = await wStore.get('w:' + username, { type: 'json' });
     if (!rec || !rec.autoTrade) continue;
     const settings = Object.assign({ riskPct: 1, horizon: 'short', maxPositions: DEFAULT_MAX_POS, minConf: DEFAULT_MIN_CONF, watchN: 15, dailyLimitPct: 5, leverage: DEFAULT_LEVERAGE }, rec.settings || {});
-    const assetIds = assetIdsByNet[rec.isMainnet !== false ? 'main' : 'test'];
+    const netKey = rec.isMainnet !== false ? 'main' : 'test';
+    const netBase = rec.isMainnet !== false ? API : TESTNET_API;
+    const assetIds = assetIdsByNet[netKey];
+    const ctx = ctxByNet[netKey];
     const posStore = getStore('hyper-trader-autopos');
     let positions = (await posStore.get('p:' + username, { type: 'json' })) || [];
 
@@ -139,7 +171,7 @@ export default async () => {
             if (!am) throw new Error('монета пропала из списка активов биржи');
             const half = (parseFloat(p.size) / 2);
             const halfStr = formatSize(half, am.szDecimals);
-            const closePx = formatPrice(long ? mark * (1 - SLIP) : mark * (1 + SLIP), am.szDecimals);
+            const closePx = formatPrice(long ? mark * (1 - SLIP_CLOSE) : mark * (1 + SLIP_CLOSE), am.szDecimals);
             await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, isBuy: !long, sizeStr: halfStr, limitPxStr: closePx, reduceOnly: true });
             const pnlUsd = (long ? mark - p.entry : p.entry - mark) * half;
             await journalWrite(username, { id: 'atp' + Date.now().toString(36), coin: p.coin, side: p.side, entry: p.entry, stop: p.stop, target: p.target, exit: mark, R: 1, pnlUsd, closedAt: Date.now(), auto: true, reason: 'autotrade-partial', partial: true });
@@ -168,7 +200,7 @@ export default async () => {
         try {
           const am = assetIds[p.coin];
           if (!am) throw new Error('монета пропала из списка активов биржи');
-          const closePx = formatPrice(long ? mark * (1 - SLIP) : mark * (1 + SLIP), am.szDecimals);
+          const closePx = formatPrice(long ? mark * (1 - SLIP_CLOSE) : mark * (1 + SLIP_CLOSE), am.szDecimals);
           await placeMarketOrder({ privateKey: apiKey, isMainnet: rec.isMainnet !== false, assetId: am.id, isBuy: !long, sizeStr: formatSize(parseFloat(p.size), am.szDecimals), limitPxStr: closePx, reduceOnly: true });
           const R = hitTarget ? p.rr : timedOut ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : (p.partialTaken ? ((long ? mark - p.entry : p.entry - mark) / (risk || 1)) : -1);
           const reason = timedOut ? 'autotrade-timeout' : (p.partialTaken ? 'autotrade-trail' : 'autotrade');
@@ -201,9 +233,9 @@ export default async () => {
         const coins = Object.entries(ctx).sort((a, b) => b[1].vol - a[1].vol).slice(0, settings.watchN).map(e => e[0]).filter(c => !positions.some(p => p.coin === c));
         const hz = HORIZONS[settings.horizon] || HORIZONS.short;
         const tfSet = new Set(hz.tfs);
-        const cache = {};
-        const jobs = []; for (const coin of coins) for (const tf of tfSet) jobs.push({ coin, tf });
-        await pLimit(jobs, 5, async ({ coin, tf }) => { cache[coin + tf] = await getCandles(coin, tf, 220); });
+        const cache = candleCacheByNet[netKey];
+        const jobs = []; for (const coin of coins) for (const tf of tfSet) if (!cache[coin + tf]) jobs.push({ coin, tf });
+        await pLimit(jobs, 5, async ({ coin, tf }) => { cache[coin + tf] = await getCandles(coin, tf, 220, netBase); });
 
         let best = null, scanned = 0, candidates = 0;
         for (const coin of coins) {
@@ -239,7 +271,7 @@ export default async () => {
             results.push(username + ': лучший сигнал ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%), но ' + (am == null ? 'не нашли id монеты на бирже' : 'нулевой размер позиции') + ' — пропуск');
           } else {
             const long = best.side === 'long';
-            const limitPx = formatPrice(long ? best.entry * (1 + SLIP) : best.entry * (1 - SLIP), am.szDecimals);
+            const limitPx = formatPrice(long ? best.entry * (1 + SLIP_OPEN) : best.entry * (1 - SLIP_OPEN), am.szDecimals);
             const sizeStr = formatSize(size, am.szDecimals);
             try {
               if (parseFloat(sizeStr) <= 0) throw new Error('размер позиции после округления под точность актива (' + am.szDecimals + ' знаков) стал нулевым — риск% слишком мал для этой монеты при текущем балансе');
