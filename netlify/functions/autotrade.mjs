@@ -164,15 +164,26 @@ export default async () => {
         if (hit1R) {
           p.breakevenMoved = true;
           p.stop = p.entry; // безубыток на всём объёме
-          p.trailExtreme = mark;
-          results.push(username + ': ' + p.coin + ' достиг 1R, стоп переведён в безубыток на весь объём, дальше трейлинг');
+          p.maxR = 1;
+          results.push(username + ': ' + p.coin + ' достиг 1R, стоп переведён в безубыток на весь объём, дальше трейлинг-ратчет');
         }
       }
 
-      // 1b) трейлинг-стоп на всём объёме после перевода в безубыток
-      if (p.breakevenMoved && p.atr) {
-        p.trailExtreme = long ? Math.max(p.trailExtreme != null ? p.trailExtreme : mark, mark) : Math.min(p.trailExtreme != null ? p.trailExtreme : mark, mark);
-        const trailCandidate = long ? p.trailExtreme - 1.5 * p.atr : p.trailExtreme + 1.5 * p.atr;
+      // 1b) трейлинг-ратчет по R на всём объёме после перевода в безубыток:
+      // стоп держится на (достигнутый максимум R) - 0.5, то есть всегда
+      // гарантирует минимум "maxR - 0.5" прибыли, независимо от ATR монеты.
+      // Раньше стоп тащился экстремум±1.5×ATR (ATR брался один раз при
+      // входе) — на истории (238 отфильтрованных сигналов) это давало те же
+      // +80R, но с винрейтом 45%, потому что на сильных движениях фиксовали
+      // позицию дальше от пика, чем было нужно (как случилось с AVAX: дошёл
+      // до +3R, ATR-трейлинг стоял так далеко, что откат до +1R не тронул
+      // стоп вообще). R-ратчет на тех же сигналах дал +82R при винрейте 55% —
+      // стабильнее, без таких больших отдач прибыли на развороте.
+      if (p.breakevenMoved && risk > 0) {
+        const curR = long ? (mark - p.entry) / risk : (p.entry - mark) / risk;
+        if (curR > (p.maxR || 1)) p.maxR = curR;
+        const stopR = p.maxR - 0.5;
+        const trailCandidate = long ? p.entry + stopR * risk : p.entry - stopR * risk;
         if (long && trailCandidate > p.stop) p.stop = trailCandidate;
         if (!long && trailCandidate < p.stop) p.stop = trailCandidate;
       }
@@ -274,7 +285,7 @@ export default async () => {
               // origStop/atr нужны для частичного закрытия на 1R и трейлинг-стопа
               // (см. блок 1a/1b выше) — origStop фиксирует исходный риск сделки,
               // т.к. p.stop после частичного закрытия двигается (безубыток, трейлинг).
-              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, origStop: best.stop, target: best.target, rr: best.rr, atr: best.atr, size: sizeStr, openedAt: Date.now(), breakevenMoved: false, trailExtreme: null });
+              positions.push({ coin: best.coin, side: best.side, entry: best.entry, stop: best.stop, origStop: best.stop, target: best.target, rr: best.rr, atr: best.atr, size: sizeStr, openedAt: Date.now(), breakevenMoved: false, maxR: null });
               results.push(username + ': ОТКРЫТА ' + best.coin + ' ' + best.side + ' (conf ' + best.conf + '%)');
             } catch (e) { results.push(username + ': ОШИБКА открытия ' + best.coin + ': ' + e.message); }
           }

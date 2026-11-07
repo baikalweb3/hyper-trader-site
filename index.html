@@ -1420,7 +1420,7 @@ function autoPositionsHTML(positions){
     return '<div class="card" style="cursor:default"><div class="h">'+sideChip(p.side)+' '+p.coin+'<span class="grow"></span>'+(pnlR!=null?'<span class="mono '+(pnlR>=0?'up':'dn')+'">'+(pnlR>=0?'+':'')+pnlR.toFixed(2)+' R сейчас</span>':'<span class="mut" style="font-size:11px">цена грузится…</span>')+'</div>'
      +'<div class="l">вход '+fmtPx(p.entry)+' · стоп '+fmtPx(p.stop)+(p.breakevenMoved?'':' · цель '+fmtPx(p.target))+' · размер '+p.size+(age!=null?' · открыта '+(age<1?'<1 ч':age+' ч')+' назад':'')+statusChip+'</div></div>';
   }).join('')+'</div>'
-   +'<p class="note">Закрывается сервером сам: на 1R прибыли стоп всего объёма переводится в безубыток, дальше — трейлинг-стоп по ATR на всей позиции (или принудительно через 5 дней, если ничего не сработало). Обновляется при каждом заходе на эту вкладку.</p>';
+   +'<p class="note">Закрывается сервером сам: на 1R прибыли стоп всего объёма переводится в безубыток, дальше — трейлинг-ратчет (стоп держится на "максимум достигнутого R минус 0.5", подтягивается только вперёд), или принудительно через 5 дней, если ничего не сработало. Обновляется при каждом заходе на эту вкладку.</p>';
 }
 function tabAuto(){
   if(S.auto.noAuth)return '<div class="empty">Войдите или зарегистрируйтесь (по email, вверху), чтобы подключить автоторговлю — ключ привязывается к вашему аккаунту.</div>';
