@@ -74,7 +74,10 @@ function breakoutSignal(z) {
   if (!a) return null;
   const g = z.slice(L - 20, L), hi = Math.max(...g.map(c => c.h)), lo = Math.min(...g.map(c => c.l));
   const v = z.map(c => c.v), av = v.slice(L - 20, L).reduce((p, q) => p + q, 0) / 20, vr = av ? x.v / av : 1;
-  if (vr < 1.2) return null;
+  // Порог был 1.2 — на истории (111 сигналов) видно, что сигналы с объёмом
+  // 1.2-1.5× от среднего дают 23% побед и -15R, а с 1.5×+ — 51% и +33R. Почти
+  // весь плюс breakout-паттерна шёл именно от сильнообъёмных пробоев.
+  if (vr < 1.5) return null;
   if (x.c > hi) return { side: 'long', entry: x.c, stop: x.c - 1.5 * a, atr: a, t: x.t, vr };
   if (x.c < lo) return { side: 'short', entry: x.c, stop: x.c + 1.5 * a, atr: a, t: x.t, vr };
   return null;
